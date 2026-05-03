@@ -1,0 +1,61 @@
+# Quantitative Trading Research App
+
+미국 주식 가격 데이터, 뉴스/공시 텍스트, SEC EDGAR 재무 데이터를 결합해 로컬에서 모델링, 백테스트, walk-forward 검증을 수행하는 멀티모달 퀀트 리서치 앱이다.
+
+이 앱은 투자 조언이나 실거래 시스템이 아니다. v1은 리서치와 검증 전용이며, 최종 매수/매도/관망 신호는 LLM이 아니라 deterministic signal engine이 산출한다.
+
+## 목표
+
+- OHLCV, 기술지표, 변동성, 모멘텀, SEC 재무지표 수집
+- Chronos-2, Granite TTM, LightGBM 계열 모델을 통한 가격/리스크 예측
+- FinBERT, FinMA/FinGPT, Ollama 기반 뉴스/공시 분석 adapter
+- 가격 feature와 텍스트/SEC feature 결합
+- 거래비용, 슬리피지, 리스크 룰을 포함한 백테스트
+- walk-forward 및 out-of-sample 검증
+
+## 기본 흐름
+
+```text
+가격/OHLCV/거래량/지표 데이터
+        |
+시계열 예측 모델 / 전통 ML 모델
+        |
+수익률·변동성·리스크 예측값
+
+뉴스/공시/실적발표 텍스트
+        |
+FinBERT / FinGPT / FinMA / 로컬 LLM
+        |
+감성 점수·이벤트 태그·리스크 요약
+
+두 결과를 feature로 결합
+        |
+백테스트 + 워크포워드 검증 + 리스크 룰
+        |
+최종 매수/매도/관망 신호
+```
+
+## 실행
+
+```bash
+uv --cache-dir .uv-cache sync --all-extras
+uv --cache-dir .uv-cache run streamlit run app.py
+```
+
+테스트:
+
+```bash
+uv --cache-dir .uv-cache run pytest
+```
+
+## 기본 종목군
+
+`SPY, QQQ, AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA, JPM`
+
+## 문서
+
+- [Architecture](docs/architecture.md)
+- [Data Sources](docs/data-sources.md)
+- [Modeling](docs/modeling.md)
+- [Risk And Validation](docs/risk-validation.md)
+- [Git Workflow](docs/git-workflow.md)
