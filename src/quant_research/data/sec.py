@@ -158,6 +158,49 @@ def extract_companyfacts_frame(companyfacts: dict[str, Any]) -> pd.DataFrame:
     return merged.sort_values("period_end").drop_duplicates("period_end", keep="last").reset_index(drop=True)
 
 
+def extract_companyconcept_frame(companyconcept: dict[str, Any], column: str) -> pd.DataFrame:
+    units = companyconcept.get("units", {})
+    unit_values = units.get("USD") or units.get("shares") or []
+    if not unit_values:
+        return pd.DataFrame(columns=["period_end", column])
+    frame = pd.DataFrame(unit_values)
+    if frame.empty or "end" not in frame or "val" not in frame:
+        return pd.DataFrame(columns=["period_end", column])
+    frame["period_end"] = pd.to_datetime(frame["end"], errors="coerce")
+    frame[column] = pd.to_numeric(frame["val"], errors="coerce")
+    return frame[["period_end", column]].dropna(subset=["period_end"]).sort_values("period_end")
+
+
+def extract_frame_values(frame_payload: dict[str, Any], column: str) -> pd.DataFrame:
+    rows = frame_payload.get("data", [])
+    if not rows:
+        return pd.DataFrame(columns=["cik", column])
+    frame = pd.DataFrame(rows)
+    if frame.empty or "cik" not in frame or "val" not in frame:
+        return pd.DataFrame(columns=["cik", column])
+    frame["cik"] = frame["cik"].astype(str).map(_normalize_cik)
+    frame[column] = pd.to_numeric(frame["val"], errors="coerce")
+    return frame[["cik", column]].dropna(subset=[column]).drop_duplicates("cik", keep="last")
+
+
+def merge_fact_frames(*frames: pd.DataFrame) -> pd.DataFrame:
+    usable = [frame for frame in frames if not frame.empty and "period_end" in frame]
+    if not usable:
+        return pd.DataFrame(columns=["period_end", "revenue", "net_income", "assets"])
+    merged = usable[0]
+    for frame in usable[1:]:
+        merged = merged.merge(frame, on="period_end", how="outer", suffixes=("", "_concept"))
+        for column in list(merged.columns):
+            if column.endswith("_concept"):
+                base_column = column.removesuffix("_concept")
+                if base_column in merged:
+                    merged[base_column] = merged[base_column].fillna(merged[column])
+                    merged = merged.drop(columns=[column])
+                else:
+                    merged = merged.rename(columns={column: base_column})
+    return merged.sort_values("period_end").drop_duplicates("period_end", keep="last").reset_index(drop=True)
+
+
 def _normalize_cik(cik: str) -> str:
     digits = "".join(char for char in str(cik) if char.isdigit())
     return digits.zfill(10)

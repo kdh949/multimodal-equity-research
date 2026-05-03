@@ -9,11 +9,19 @@ from quant_research.backtest.engine import BacktestConfig, BacktestResult, run_l
 from quant_research.config import DEFAULT_TICKERS
 from quant_research.data.market import SyntheticMarketDataProvider, YFinanceMarketDataProvider
 from quant_research.data.news import GDELTNewsProvider, SyntheticNewsProvider, YFinanceNewsProvider
-from quant_research.data.sec import SecEdgarClient, SyntheticSecProvider, extract_companyfacts_frame
+from quant_research.data.sec import (
+    SecEdgarClient,
+    SyntheticSecProvider,
+    extract_companyconcept_frame,
+    extract_companyfacts_frame,
+    extract_frame_values,
+    merge_fact_frames,
+)
 from quant_research.features.fusion import fuse_features
 from quant_research.features.price import build_price_features
 from quant_research.features.sec import build_sec_features
 from quant_research.features.text import KeywordSentimentAnalyzer, build_news_features
+from quant_research.models.text import FinBERTSentimentAnalyzer
 from quant_research.models.timeseries import Chronos2Adapter, GraniteTTMAdapter
 from quant_research.validation.walk_forward import WalkForwardConfig, walk_forward_predict
 
@@ -43,6 +51,12 @@ class PipelineConfig:
     top_n: int = 3
     cost_bps: float = 5.0
     slippage_bps: float = 2.0
+    sentiment_model: str = "finbert"
+    max_symbol_weight: float = 0.35
+    portfolio_volatility_limit: float = 0.04
+    max_drawdown_stop: float = 0.20
+    sec_frame_period: str = "CY2024Q4I"
+    enable_feature_model_ablation: bool = False
 
 
 @dataclass(frozen=True)
@@ -68,7 +82,7 @@ def run_research_pipeline(config: PipelineConfig | None = None) -> PipelineResul
     price_features = GraniteTTMAdapter().add_proxy_forecasts(price_features)
 
     news_items = _load_news_items(config, tickers)
-    news_features = build_news_features(news_items, KeywordSentimentAnalyzer())
+    news_features = build_news_features(news_items, _sentiment_analyzer(config.sentiment_model))
 
     filings_by_ticker, facts_by_ticker = _load_sec_data(config, tickers)
     sec_features = build_sec_features(filings_by_ticker, facts_by_ticker, price_features)
@@ -88,9 +102,11 @@ def run_research_pipeline(config: PipelineConfig | None = None) -> PipelineResul
     predictions = _attach_signal_features(predictions, features)
     backtest = run_long_only_backtest(
         predictions,
-        BacktestConfig(top_n=config.top_n, cost_bps=config.cost_bps, slippage_bps=config.slippage_bps),
+        _backtest_config(config),
     )
     ablation_summary = _run_ablation_summary(predictions, config)
+    if config.enable_feature_model_ablation:
+        ablation_summary.extend(_run_feature_model_ablation_summary(features, config))
 
     return PipelineResult(
         market_data=market_data,
@@ -132,13 +148,23 @@ def _load_sec_data(config: PipelineConfig, tickers: list[str]) -> tuple[dict[str
         client = SecEdgarClient()
         filings_by_ticker: dict[str, pd.DataFrame] = {}
         facts_by_ticker: dict[str, pd.DataFrame] = {}
+        frame_assets = _load_sec_frame_assets(client, config)
         for ticker in tickers:
             cik = CIK_BY_TICKER.get(ticker)
             if cik is None:
                 continue
             try:
                 filings_by_ticker[ticker] = client.recent_filings(cik, {"8-K", "10-Q", "10-K", "4"})
-                facts_by_ticker[ticker] = extract_companyfacts_frame(client.get_companyfacts(cik))
+                facts_frame = extract_companyfacts_frame(client.get_companyfacts(cik))
+                concept_frame = extract_companyconcept_frame(
+                    client.get_companyconcept(cik, "us-gaap", "NetIncomeLoss"),
+                    "net_income",
+                )
+                merged_facts = merge_fact_frames(facts_frame, concept_frame)
+                cik10 = "".join(char for char in str(cik) if char.isdigit()).zfill(10)
+                if cik10 in frame_assets:
+                    merged_facts["sec_frame_assets"] = frame_assets[cik10]
+                facts_by_ticker[ticker] = merged_facts
             except Exception:
                 continue
         if filings_by_ticker or facts_by_ticker:
@@ -148,6 +174,17 @@ def _load_sec_data(config: PipelineConfig, tickers: list[str]) -> tuple[dict[str
     filings = {ticker: provider.recent_filings(CIK_BY_TICKER.get(ticker, "0")) for ticker in tickers}
     facts = {ticker: provider.companyfacts_frame(CIK_BY_TICKER.get(ticker, "0")) for ticker in tickers}
     return filings, facts
+
+
+def _load_sec_frame_assets(client: SecEdgarClient, config: PipelineConfig) -> dict[str, float]:
+    try:
+        frame = extract_frame_values(
+            client.get_frame("us-gaap", "Assets", "USD", config.sec_frame_period),
+            "sec_frame_assets",
+        )
+    except Exception:
+        return {}
+    return dict(zip(frame["cik"], frame["sec_frame_assets"], strict=False))
 
 
 def _attach_signal_features(predictions: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
@@ -163,6 +200,7 @@ def _attach_signal_features(predictions: pd.DataFrame, features: pd.DataFrame) -
         "liquidity_score",
         "news_sentiment_mean",
         "news_negative_ratio",
+        "sec_event_confidence",
         "revenue_growth",
         "net_income_growth",
         "assets_growth",
@@ -179,6 +217,12 @@ def _attach_signal_features(predictions: pd.DataFrame, features: pd.DataFrame) -
     return enriched
 
 
+def _sentiment_analyzer(model_name: str):
+    if model_name.lower() == "finbert":
+        return FinBERTSentimentAnalyzer()
+    return KeywordSentimentAnalyzer()
+
+
 def _run_ablation_summary(predictions: pd.DataFrame, config: PipelineConfig) -> list[dict[str, object]]:
     if predictions.empty:
         return []
@@ -192,11 +236,12 @@ def _run_ablation_summary(predictions: pd.DataFrame, config: PipelineConfig) -> 
     for name, frame in scenario_frames.items():
         result = run_long_only_backtest(
             frame,
-            BacktestConfig(top_n=config.top_n, cost_bps=config.cost_bps, slippage_bps=config.slippage_bps),
+            _backtest_config(config),
         )
         scenarios.append(
             {
                 "scenario": name,
+                "kind": "signal",
                 "cagr": result.metrics.cagr,
                 "sharpe": result.metrics.sharpe,
                 "max_drawdown": result.metrics.max_drawdown,
@@ -206,11 +251,12 @@ def _run_ablation_summary(predictions: pd.DataFrame, config: PipelineConfig) -> 
 
     no_cost = run_long_only_backtest(
         predictions,
-        BacktestConfig(top_n=config.top_n, cost_bps=0.0, slippage_bps=0.0),
+        _backtest_config(config, cost_bps=0.0, slippage_bps=0.0),
     )
     scenarios.append(
         {
             "scenario": "no_costs",
+            "kind": "cost",
             "cagr": no_cost.metrics.cagr,
             "sharpe": no_cost.metrics.sharpe,
             "max_drawdown": no_cost.metrics.max_drawdown,
@@ -218,3 +264,67 @@ def _run_ablation_summary(predictions: pd.DataFrame, config: PipelineConfig) -> 
         }
     )
     return scenarios
+
+
+def _run_feature_model_ablation_summary(
+    features: pd.DataFrame,
+    config: PipelineConfig,
+) -> list[dict[str, object]]:
+    scenarios: list[dict[str, object]] = []
+    variants = {
+        "full_model_features": features,
+        "no_chronos_features": features.drop(
+            columns=[column for column in features.columns if column.startswith("chronos_")],
+            errors="ignore",
+        ),
+        "no_granite_features": features.drop(
+            columns=[column for column in features.columns if column.startswith("granite_ttm_")],
+            errors="ignore",
+        ),
+        "tabular_without_ts_proxies": features.drop(
+            columns=[
+                column
+                for column in features.columns
+                if column.startswith("chronos_") or column.startswith("granite_ttm_")
+            ],
+            errors="ignore",
+        ),
+    }
+    for scenario, variant in variants.items():
+        predictions, _summary = walk_forward_predict(
+            variant,
+            WalkForwardConfig(
+                train_periods=config.train_periods,
+                test_periods=config.test_periods,
+                gap_periods=config.gap_periods,
+                model_name=config.model_name,
+            ),
+        )
+        predictions = _attach_signal_features(predictions, variant)
+        result = run_long_only_backtest(predictions, _backtest_config(config))
+        scenarios.append(
+            {
+                "scenario": scenario,
+                "kind": "model_feature",
+                "cagr": result.metrics.cagr,
+                "sharpe": result.metrics.sharpe,
+                "max_drawdown": result.metrics.max_drawdown,
+                "excess_return": result.metrics.excess_return,
+            }
+        )
+    return scenarios
+
+
+def _backtest_config(
+    config: PipelineConfig,
+    cost_bps: float | None = None,
+    slippage_bps: float | None = None,
+) -> BacktestConfig:
+    return BacktestConfig(
+        top_n=config.top_n,
+        cost_bps=config.cost_bps if cost_bps is None else cost_bps,
+        slippage_bps=config.slippage_bps if slippage_bps is None else slippage_bps,
+        max_symbol_weight=config.max_symbol_weight,
+        portfolio_volatility_limit=config.portfolio_volatility_limit,
+        max_drawdown_stop=config.max_drawdown_stop,
+    )

@@ -11,6 +11,7 @@ def test_synthetic_pipeline_runs_end_to_end() -> None:
             train_periods=60,
             test_periods=15,
             top_n=2,
+            enable_feature_model_ablation=True,
         )
     )
 
@@ -18,6 +19,17 @@ def test_synthetic_pipeline_runs_end_to_end() -> None:
     assert not result.predictions.empty
     assert not result.signals.empty
     assert not result.backtest.equity_curve.empty
-    assert {"all_features", "no_text_risk", "no_sec_risk", "no_costs"} == {
+    assert "is_oos" in result.validation_summary
+    assert result.validation_summary["is_oos"].any()
+    assert {
+        "all_features",
+        "no_text_risk",
+        "no_sec_risk",
+        "no_costs",
+        "full_model_features",
+        "no_chronos_features",
+        "no_granite_features",
+        "tabular_without_ts_proxies",
+    } == {
         row["scenario"] for row in result.ablation_summary
     }

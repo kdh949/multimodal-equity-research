@@ -9,7 +9,12 @@ from quant_research.data.news import (
     SyntheticNewsProvider,
     YFinanceNewsProvider,
 )
-from quant_research.data.sec import SecEdgarClient, SyntheticSecProvider
+from quant_research.data.sec import (
+    SecEdgarClient,
+    SyntheticSecProvider,
+    extract_companyconcept_frame,
+    extract_frame_values,
+)
 
 __all__ = [
     "GDELTNewsProvider",
@@ -21,4 +26,6 @@ __all__ = [
     "SyntheticSecProvider",
     "YFinanceMarketDataProvider",
     "YFinanceNewsProvider",
+    "extract_companyconcept_frame",
+    "extract_frame_values",
 ]
