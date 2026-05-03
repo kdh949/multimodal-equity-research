@@ -48,6 +48,19 @@ uv --cache-dir .uv-cache run streamlit run app.py
 uv --cache-dir .uv-cache run pytest
 ```
 
+## 로컬 heavy model 추론
+
+기본 실행은 `proxy`/`rules` fallback으로 빠르게 동작한다. 실제 Chronos-2, Granite TTM, FinMA, FinGPT 로컬 추론을 쓰려면 optional dependency와 Hugging Face 모델 캐시가 필요하다.
+
+```bash
+uv --cache-dir .uv-cache sync --all-extras
+uv --cache-dir .uv-cache run python scripts/preload_local_models.py --chronos --granite
+uv --cache-dir .uv-cache run python scripts/preload_local_models.py --finma --mode download
+uv --cache-dir .uv-cache run python scripts/preload_local_models.py --fingpt --mode download --fingpt-base-id meta-llama/Meta-Llama-3-8B
+```
+
+Streamlit 사이드바에서 `Time-series inference=local`, `Filing extractor=finma|fingpt`, `Use local filing LLM`을 켜면 실제 로컬 어댑터를 호출한다. FinGPT는 LoRA adapter라 base model 접근 권한과 `HF_TOKEN` 또는 Hugging Face 로그인 상태가 필요할 수 있다.
+
 ## 기본 종목군
 
 `SPY, QQQ, AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA, JPM`

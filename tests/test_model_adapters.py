@@ -66,6 +66,42 @@ def test_chronos2_proxy_forecast_columns_are_added() -> None:
     )
 
 
+def test_chronos2_local_inference_normalizes_pipeline_output(monkeypatch) -> None:
+    class FakeChronosPipeline:
+        def predict_df(self, context_df, **kwargs):
+            assert {"id", "timestamp", "target"} <= set(context_df.columns)
+            assert kwargs["prediction_length"] == 1
+            return pd.DataFrame(
+                {
+                    "id": ["AAPL", "MSFT"],
+                    "timestamp": pd.to_datetime(["2026-02-01", "2026-02-01"]),
+                    "0.1": [-0.02, -0.03],
+                    "0.5": [0.01, 0.02],
+                    "0.9": [0.04, 0.05],
+                }
+            )
+
+    dates = pd.date_range("2026-01-01", periods=10, freq="D")
+    frame = pd.DataFrame(
+        {
+            "date": list(dates) * 2,
+            "ticker": ["AAPL"] * 10 + ["MSFT"] * 10,
+            "return_1": [0.001] * 20,
+            "return_20": [0.01] * 20,
+            "volatility_20": [0.02] * 20,
+        }
+    )
+    adapter = Chronos2Adapter()
+    monkeypatch.setattr(adapter, "_load_pipeline", lambda: FakeChronosPipeline())
+
+    output = adapter.add_local_forecasts(frame, min_context=5, max_inference_windows=1)
+    latest = output[output["date"] == dates[-1]].set_index("ticker")
+
+    assert latest.loc["AAPL", "chronos_expected_return"] == 0.01
+    assert latest.loc["MSFT", "chronos_downside_quantile"] == -0.03
+    assert latest.loc["MSFT", "chronos_upside_quantile"] == 0.05
+
+
 def test_granite_ttm_proxy_forecast_columns_are_added() -> None:
     frame = pd.DataFrame(
         {
@@ -100,6 +136,36 @@ def test_granite_ttm_proxy_forecast_columns_are_added() -> None:
         (1 / (1 + np.exp(-abs(short_signal) * 100))).clip(0, 1),
         check_names=False,
     )
+
+
+def test_granite_ttm_local_inference_uses_forecaster_contract(monkeypatch) -> None:
+    class FakeForecaster:
+        def fit(self, series):
+            assert len(series) >= 5
+            return self
+
+        def predict(self, fh):
+            assert fh == [1]
+            return pd.Series([0.0123])
+
+    dates = pd.date_range("2026-01-01", periods=8, freq="D")
+    frame = pd.DataFrame(
+        {
+            "date": dates,
+            "ticker": ["AAPL"] * len(dates),
+            "return_1": [0.001] * len(dates),
+            "return_5": [0.002] * len(dates),
+            "high_low_range": [0.01] * len(dates),
+        }
+    )
+    adapter = GraniteTTMAdapter()
+    monkeypatch.setattr(adapter, "_load_forecaster", lambda: FakeForecaster())
+
+    output = adapter.add_local_forecasts(frame, min_context=5, max_inference_windows=1)
+    latest = output[output["date"] == dates[-1]].iloc[0]
+
+    assert latest["granite_ttm_expected_return"] == 0.0123
+    assert latest["granite_ttm_confidence"] == 1.0
 
 
 def test_tabular_model_fallback_schema_when_lightgbm_is_absent(monkeypatch) -> None:
@@ -160,6 +226,34 @@ def test_filing_and_fingpt_extractor_follow_structured_contract_without_services
         assert isinstance(result["risk_flag"], bool)
         assert isinstance(result["confidence"], float)
         assert isinstance(result["summary_ref"], str)
+
+
+def test_finma_local_generation_output_is_validated(monkeypatch) -> None:
+    extractor = FilingEventExtractor(use_local_model=True)
+    monkeypatch.setattr(
+        extractor,
+        "_generate_with_local_model",
+        lambda text: '{"event_tag":"guidance","risk_flag":true,"confidence":0.82,"summary_ref":"guidance risk"}',
+    )
+
+    result = extractor.extract("The filing mentions guidance risk.")
+
+    assert result == {
+        "event_tag": "guidance",
+        "risk_flag": True,
+        "confidence": 0.82,
+        "summary_ref": "guidance risk",
+    }
+
+
+def test_fingpt_local_generation_falls_back_to_rules_on_bad_json(monkeypatch) -> None:
+    extractor = FinGPTEventExtractor(use_local_model=True)
+    monkeypatch.setattr(extractor, "_generate_with_local_model", lambda text: "not json")
+
+    result = extractor.extract("Form 8-K material legal risk")
+
+    assert result["event_tag"] != "none"
+    assert result["risk_flag"] is True
 
 
 def test_ollama_agent_falls_back_when_server_unreachable(monkeypatch) -> None:

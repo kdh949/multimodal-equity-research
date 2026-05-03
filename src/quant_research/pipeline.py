@@ -21,7 +21,11 @@ from quant_research.features.fusion import fuse_features
 from quant_research.features.price import build_price_features
 from quant_research.features.sec import build_sec_features
 from quant_research.features.text import KeywordSentimentAnalyzer, build_news_features
-from quant_research.models.text import FinBERTSentimentAnalyzer
+from quant_research.models.text import (
+    FilingEventExtractor,
+    FinBERTSentimentAnalyzer,
+    FinGPTEventExtractor,
+)
 from quant_research.models.timeseries import Chronos2Adapter, GraniteTTMAdapter
 from quant_research.validation.walk_forward import WalkForwardConfig, walk_forward_predict
 
@@ -52,6 +56,19 @@ class PipelineConfig:
     cost_bps: float = 5.0
     slippage_bps: float = 2.0
     sentiment_model: str = "finbert"
+    time_series_inference_mode: str = "proxy"
+    time_series_target_column: str = "return_1"
+    time_series_min_context: int = 64
+    max_time_series_inference_windows: int | None = None
+    chronos_model_id: str = "amazon/chronos-2"
+    granite_ttm_model_id: str = "ibm-granite/granite-timeseries-ttm-r2"
+    granite_ttm_revision: str | None = None
+    local_model_device_map: str = "auto"
+    filing_extractor_model: str = "rules"
+    enable_local_filing_llm: bool = False
+    finma_model_id: str = "ChanceFocus/finma-7b-nlp"
+    fingpt_model_id: str = "FinGPT/fingpt-mt_llama3-8b_lora"
+    fingpt_base_model_id: str | None = "meta-llama/Meta-Llama-3-8B"
     max_symbol_weight: float = 0.35
     portfolio_volatility_limit: float = 0.04
     max_drawdown_stop: float = 0.20
@@ -78,14 +95,37 @@ def run_research_pipeline(config: PipelineConfig | None = None) -> PipelineResul
 
     market_data = _load_market_data(config, tickers)
     price_features = build_price_features(market_data)
-    price_features = Chronos2Adapter().add_proxy_forecasts(price_features)
-    price_features = GraniteTTMAdapter().add_proxy_forecasts(price_features)
+    price_features = Chronos2Adapter(
+        model_id=config.chronos_model_id,
+        device_map=config.local_model_device_map,
+    ).add_forecasts(
+        price_features,
+        mode=config.time_series_inference_mode,
+        target_column=config.time_series_target_column,
+        min_context=config.time_series_min_context,
+        max_inference_windows=config.max_time_series_inference_windows,
+    )
+    price_features = GraniteTTMAdapter(
+        model_id=config.granite_ttm_model_id,
+        revision=config.granite_ttm_revision,
+    ).add_forecasts(
+        price_features,
+        mode=config.time_series_inference_mode,
+        target_column=config.time_series_target_column,
+        min_context=config.time_series_min_context,
+        max_inference_windows=config.max_time_series_inference_windows,
+    )
 
     news_items = _load_news_items(config, tickers)
     news_features = build_news_features(news_items, _sentiment_analyzer(config.sentiment_model))
 
     filings_by_ticker, facts_by_ticker = _load_sec_data(config, tickers)
-    sec_features = build_sec_features(filings_by_ticker, facts_by_ticker, price_features)
+    sec_features = build_sec_features(
+        filings_by_ticker,
+        facts_by_ticker,
+        price_features,
+        filing_extractor=_filing_extractor(config),
+    )
 
     features = fuse_features(price_features, news_features, sec_features)
     features = features.dropna(subset=["forward_return_1"]).reset_index(drop=True)
@@ -221,6 +261,24 @@ def _sentiment_analyzer(model_name: str):
     if model_name.lower() == "finbert":
         return FinBERTSentimentAnalyzer()
     return KeywordSentimentAnalyzer()
+
+
+def _filing_extractor(config: PipelineConfig):
+    model_name = config.filing_extractor_model.lower()
+    if model_name == "finma":
+        return FilingEventExtractor(
+            model_id=config.finma_model_id,
+            use_local_model=config.enable_local_filing_llm,
+            device_map=config.local_model_device_map,
+        )
+    if model_name == "fingpt":
+        return FinGPTEventExtractor(
+            model_id=config.fingpt_model_id,
+            use_local_model=config.enable_local_filing_llm,
+            device_map=config.local_model_device_map,
+            base_model_id=config.fingpt_base_model_id,
+        )
+    return FilingEventExtractor(use_local_model=False)
 
 
 def _run_ablation_summary(predictions: pd.DataFrame, config: PipelineConfig) -> list[dict[str, object]]:

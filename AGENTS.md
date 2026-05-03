@@ -16,6 +16,7 @@
 - UI는 Streamlit에 두고, 데이터/모델/검증/신호 로직은 `src/quant_research/` 패키지에 둔다.
 - 가격 데이터, 텍스트 데이터, SEC 데이터는 provider 인터페이스 뒤에 둔다.
 - Chronos-2, Granite TTM, FinBERT, FinMA, FinGPT, Ollama는 optional adapter로 구현한다. 의존성이 없거나 모델이 내려받아지지 않은 환경에서도 테스트는 돌아가야 한다.
+- 실제 heavy model 추론은 `scripts/preload_local_models.py`로 모델 캐시를 준비한 뒤 명시적으로 켠다. 기본 테스트와 CI는 proxy/rules fallback 경로를 유지한다.
 - LightGBM이 없으면 scikit-learn gradient boosting fallback을 사용한다.
 - 텍스트 모델 출력은 자유 서술 대신 `sentiment_score`, `event_tag`, `risk_flag`, `confidence`, `summary_ref` 같은 구조화 feature로 저장한다.
 

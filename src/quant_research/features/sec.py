@@ -9,6 +9,7 @@ def build_sec_features(
     filings_by_ticker: dict[str, pd.DataFrame],
     facts_by_ticker: dict[str, pd.DataFrame],
     calendar: pd.DataFrame,
+    filing_extractor: object | None = None,
 ) -> pd.DataFrame:
     base = calendar[["date", "ticker"]].drop_duplicates().copy()
     base["date"] = pd.to_datetime(base["date"]).dt.normalize()
@@ -16,7 +17,7 @@ def build_sec_features(
     for ticker, group in base.groupby("ticker"):
         features = group.sort_values("date").copy()
         filings = filings_by_ticker.get(ticker, pd.DataFrame())
-        filing_daily = _daily_filing_features(filings, ticker)
+        filing_daily = _daily_filing_features(filings, ticker, filing_extractor)
         features = features.merge(filing_daily, on=["date", "ticker"], how="left")
         for column in ["sec_8k_count", "sec_10q_count", "sec_10k_count", "sec_form4_count", "sec_risk_flag"]:
             features[column] = features[column].fillna(0.0)
@@ -33,7 +34,11 @@ def build_sec_features(
     return pd.concat(rows, ignore_index=True).sort_values(["date", "ticker"]).reset_index(drop=True)
 
 
-def _daily_filing_features(filings: pd.DataFrame, ticker: str) -> pd.DataFrame:
+def _daily_filing_features(
+    filings: pd.DataFrame,
+    ticker: str,
+    filing_extractor: object | None = None,
+) -> pd.DataFrame:
     from quant_research.models.text import FilingEventExtractor
 
     if filings.empty:
@@ -59,7 +64,7 @@ def _daily_filing_features(filings: pd.DataFrame, ticker: str) -> pd.DataFrame:
     frame["sec_10k_count"] = (frame["form"] == "10-K").astype(float)
     frame["sec_form4_count"] = (frame["form"] == "4").astype(float)
     frame["sec_risk_flag"] = frame["form"].isin({"8-K", "4"}).astype(float)
-    extractor = FilingEventExtractor()
+    extractor = filing_extractor or FilingEventExtractor()
     extracted = frame.apply(
         lambda row: extractor.extract(f"Form {row['form']} {row.get('primary_document', '')}"),
         axis=1,

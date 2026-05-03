@@ -44,3 +44,5 @@ LLM과 문서 이해 모델은 feature와 설명을 만든다. 투자 판단은 
 ## Optional Model Policy
 
 Chronos-2, Granite TTM, FinBERT, FinMA, FinGPT, Ollama는 optional adapter로 둔다. 앱은 모델이 없을 때도 synthetic 데이터와 lightweight fallback으로 실행되어야 한다.
+
+실제 local heavy model 추론은 명시적으로 켜야 한다. `scripts/preload_local_models.py`는 Hugging Face 캐시 다운로드와 warmup을 담당하고, Streamlit 설정은 모델 ID, device map, FinGPT base model을 주입한다. 모델 로딩/추론 실패는 리서치 파이프라인 전체 실패가 아니라 해당 adapter의 deterministic fallback으로 처리한다.

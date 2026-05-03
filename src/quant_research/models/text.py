@@ -50,9 +50,24 @@ class FinBERTSentimentAnalyzer:
 
 @dataclass
 class FilingEventExtractor:
-    model_id: str = "TheFinAI/finma-7b-nlp"
+    model_id: str = "ChanceFocus/finma-7b-nlp"
+    use_local_model: bool = False
+    device_map: str = "auto"
+    local_files_only: bool = False
+    trust_remote_code: bool = False
+    max_new_tokens: int = 192
+    _tokenizer: Any = field(default=None, init=False, repr=False)
+    _model: Any = field(default=None, init=False, repr=False)
 
     def extract(self, text: str) -> dict[str, object]:
+        if self.use_local_model:
+            try:
+                return self.validate_json(self._generate_with_local_model(text))
+            except Exception:
+                pass
+        return self.extract_with_rules(text)
+
+    def extract_with_rules(self, text: str) -> dict[str, object]:
         lower = text.lower()
         event_tags = []
         for keyword, tag in {
@@ -79,7 +94,7 @@ class FilingEventExtractor:
         }
 
     def validate_json(self, raw: str) -> dict[str, object]:
-        payload = json.loads(raw)
+        payload = json.loads(_extract_json_object(raw))
         required = {"event_tag", "risk_flag", "confidence", "summary_ref"}
         missing = required.difference(payload)
         if missing:
@@ -88,20 +103,119 @@ class FilingEventExtractor:
             raise ValueError("event_tag must be a string")
         if not isinstance(payload["risk_flag"], bool):
             raise ValueError("risk_flag must be a boolean")
-        if not isinstance(payload["confidence"], int | float):
+        if isinstance(payload["confidence"], bool) or not isinstance(payload["confidence"], int | float):
             raise ValueError("confidence must be numeric")
         if not 0 <= float(payload["confidence"]) <= 1:
             raise ValueError("confidence must be between 0 and 1")
         if not isinstance(payload["summary_ref"], str):
             raise ValueError("summary_ref must be a string")
+        payload["confidence"] = float(payload["confidence"])
         return payload
+
+    def _generate_with_local_model(self, text: str) -> str:
+        tokenizer, model = self._load_local_model()
+        prompt = _event_extraction_prompt(text)
+        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=4096)
+        device = _model_device(model)
+        if device is not None:
+            inputs = {key: value.to(device) for key, value in inputs.items()}
+        output_ids = model.generate(
+            **inputs,
+            max_new_tokens=self.max_new_tokens,
+            do_sample=False,
+            pad_token_id=getattr(tokenizer, "eos_token_id", None),
+        )
+        generated = output_ids[0][inputs["input_ids"].shape[-1] :]
+        return tokenizer.decode(generated, skip_special_tokens=True)
+
+    def _load_local_model(self) -> tuple[Any, Any]:
+        if self._tokenizer is None or self._model is None:
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+
+            kwargs = _from_pretrained_kwargs(self.local_files_only, self.trust_remote_code)
+            self._tokenizer = AutoTokenizer.from_pretrained(self.model_id, **kwargs)
+            _ensure_pad_token(self._tokenizer)
+            self._model = AutoModelForCausalLM.from_pretrained(
+                self.model_id,
+                device_map=self.device_map,
+                **kwargs,
+            )
+        return self._tokenizer, self._model
 
 
 @dataclass
 class FinGPTEventExtractor(FilingEventExtractor):
-    model_id: str = "AI4Finance-Foundation/FinGPT"
+    model_id: str = "FinGPT/fingpt-mt_llama3-8b_lora"
+    base_model_id: str | None = "meta-llama/Meta-Llama-3-8B"
+
+    def _load_local_model(self) -> tuple[Any, Any]:
+        if self._tokenizer is None or self._model is None:
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+
+            tokenizer_id = self.base_model_id or self.model_id
+            kwargs = _from_pretrained_kwargs(self.local_files_only, self.trust_remote_code)
+            self._tokenizer = AutoTokenizer.from_pretrained(tokenizer_id, **kwargs)
+            _ensure_pad_token(self._tokenizer)
+            if self.base_model_id:
+                from peft import PeftModel
+
+                base = AutoModelForCausalLM.from_pretrained(
+                    self.base_model_id,
+                    device_map=self.device_map,
+                    **kwargs,
+                )
+                peft_kwargs = {"local_files_only": True} if self.local_files_only else {}
+                self._model = PeftModel.from_pretrained(base, self.model_id, **peft_kwargs)
+            else:
+                self._model = AutoModelForCausalLM.from_pretrained(
+                    self.model_id,
+                    device_map=self.device_map,
+                    **kwargs,
+                )
+        return self._tokenizer, self._model
 
 
 def _stable_summary_ref(text: str) -> str:
     cleaned = re.sub(r"\s+", " ", text).strip()
     return cleaned[:160]
+
+
+def _event_extraction_prompt(text: str) -> str:
+    return (
+        "You are a financial filing event extraction model. "
+        "Return only valid JSON with keys event_tag, risk_flag, confidence, summary_ref. "
+        "event_tag must be a comma-separated string or 'none'; risk_flag must be boolean; "
+        "confidence must be a number between 0 and 1; summary_ref must be a short source-grounded phrase.\n\n"
+        f"Document:\n{text[:4000]}\n\nJSON:"
+    )
+
+
+def _extract_json_object(raw: str) -> str:
+    stripped = raw.strip()
+    if stripped.startswith("{") and stripped.endswith("}"):
+        return stripped
+    match = re.search(r"\{.*\}", stripped, flags=re.DOTALL)
+    if match:
+        return match.group(0)
+    raise ValueError("No JSON object found in model output")
+
+
+def _from_pretrained_kwargs(local_files_only: bool, trust_remote_code: bool) -> dict[str, object]:
+    kwargs: dict[str, object] = {}
+    if local_files_only:
+        kwargs["local_files_only"] = True
+    if trust_remote_code:
+        kwargs["trust_remote_code"] = True
+    return kwargs
+
+
+def _ensure_pad_token(tokenizer: Any) -> None:
+    if getattr(tokenizer, "pad_token_id", None) is None and getattr(tokenizer, "eos_token", None):
+        tokenizer.pad_token = tokenizer.eos_token
+
+
+def _model_device(model: Any) -> Any | None:
+    try:
+        return next(model.parameters()).device
+    except (AttributeError, StopIteration):
+        return getattr(model, "device", None)
