@@ -70,7 +70,9 @@ def walk_forward_predict(
     feature_columns = infer_feature_columns(frame, target)
     predictions: list[pd.DataFrame] = []
     summaries: list[dict[str, object]] = []
-    for fold in walk_forward_splits(frame, config):
+    folds = walk_forward_splits(frame, config)
+    final_fold_id = folds[-1].fold if folds else None
+    for fold in folds:
         train = frame[frame["date"].isin(fold.train_dates)].dropna(subset=[target])
         test = frame[frame["date"].isin(fold.test_dates)].copy()
         if len(train) < config.min_train_observations or test.empty:
@@ -80,6 +82,7 @@ def walk_forward_predict(
         pred = model.predict(test)
         pred = pred.merge(test[["date", "ticker", target]], on=["date", "ticker"], how="left")
         pred["fold"] = fold.fold
+        pred["is_oos"] = fold.fold == final_fold_id
         predictions.append(pred)
         fold_mae = (pred["expected_return"] - pred[target]).abs().mean()
         direction = (pred["expected_return"] * pred[target] > 0).mean()
@@ -93,6 +96,7 @@ def walk_forward_predict(
                 "train_observations": len(train),
                 "test_observations": len(test),
                 "model_name": model.actual_model_name,
+                "is_oos": fold.fold == final_fold_id,
                 "mae": fold_mae,
                 "directional_accuracy": direction,
             }

@@ -24,6 +24,17 @@ with st.sidebar:
     test_periods = st.slider("Test periods", min_value=5, max_value=60, value=20, step=5)
     cost_bps = st.slider("Cost bps", min_value=0.0, max_value=50.0, value=5.0, step=0.5)
     slippage_bps = st.slider("Slippage bps", min_value=0.0, max_value=50.0, value=2.0, step=0.5)
+    sentiment_model = st.selectbox("Sentiment model", ["finbert", "keyword"], index=0)
+    max_symbol_weight = st.slider("Max symbol weight", min_value=0.05, max_value=1.0, value=0.35, step=0.05)
+    portfolio_volatility_limit = st.slider(
+        "Portfolio volatility limit",
+        min_value=0.005,
+        max_value=0.10,
+        value=0.04,
+        step=0.005,
+    )
+    max_drawdown_stop = st.slider("Max drawdown stop", min_value=0.05, max_value=0.50, value=0.20, step=0.05)
+    enable_feature_model_ablation = st.checkbox("Run model feature ablation", value=False)
     run = st.button("Run research", type="primary", use_container_width=True)
 
 if data_mode == "live":
@@ -41,6 +52,11 @@ config = PipelineConfig(
     top_n=top_n,
     cost_bps=cost_bps,
     slippage_bps=slippage_bps,
+    sentiment_model=sentiment_model,
+    max_symbol_weight=max_symbol_weight,
+    portfolio_volatility_limit=portfolio_volatility_limit,
+    max_drawdown_stop=max_drawdown_stop,
+    enable_feature_model_ablation=enable_feature_model_ablation,
 )
 
 if run or "result" not in st.session_state:
@@ -100,6 +116,13 @@ with tabs[2]:
 with tabs[3]:
     st.subheader("Walk-Forward Summary")
     st.dataframe(result.validation_summary, use_container_width=True, hide_index=True)
+    if "is_oos" in result.validation_summary.columns:
+        oos_summary = result.validation_summary[result.validation_summary["is_oos"]]
+    else:
+        oos_summary = pd.DataFrame()
+    if not oos_summary.empty:
+        st.subheader("Out-of-Sample Holdout")
+        st.dataframe(oos_summary, use_container_width=True, hide_index=True)
     st.subheader("Ablation Summary")
     st.dataframe(pd.DataFrame(result.ablation_summary), use_container_width=True, hide_index=True)
 

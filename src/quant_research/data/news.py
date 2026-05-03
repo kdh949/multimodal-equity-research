@@ -60,14 +60,15 @@ class YFinanceNewsProvider:
     max_items_per_ticker: int = 50
 
     def get_news(self, tickers: list[str], start: str | date, end: str | date) -> list[NewsItem]:
-        del start
         try:
             import yfinance as yf
         except ImportError as exc:  # pragma: no cover - depends on optional runtime
             raise RuntimeError("yfinance is required for live ticker news") from exc
 
+        start_ts = pd.Timestamp(start).normalize()
         end_ts = pd.Timestamp(end)
         items: list[NewsItem] = []
+        seen: set[tuple[str, str, str]] = set()
         for ticker in tickers:
             for raw in (yf.Ticker(ticker).news or [])[: self.max_items_per_ticker]:
                 content = raw.get("content", raw)
@@ -76,13 +77,20 @@ class YFinanceNewsProvider:
                 source = provider.get("displayName") or raw.get("publisher") or "yfinance"
                 published_raw = content.get("pubDate") or raw.get("providerPublishTime") or end_ts
                 published = _parse_news_timestamp(published_raw)
+                if pd.isna(published) or published < start_ts or published > end_ts.normalize():
+                    continue
+                url = content.get("canonicalUrl", {}).get("url", raw.get("link", ""))
+                key = (ticker, title, url)
+                if key in seen:
+                    continue
+                seen.add(key)
                 items.append(
                     NewsItem(
                         ticker=ticker,
                         published_at=published,
                         title=title,
                         source=source,
-                        url=content.get("canonicalUrl", {}).get("url", raw.get("link", "")),
+                        url=url,
                         summary=content.get("summary", ""),
                     )
                 )

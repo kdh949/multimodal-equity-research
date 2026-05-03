@@ -56,6 +56,10 @@ class FilingEventExtractor:
         lower = text.lower()
         event_tags = []
         for keyword, tag in {
+            "8-k": "current_report",
+            "10-q": "quarterly_report",
+            "10-k": "annual_report",
+            "form 4": "insider_activity",
             "material": "material_event",
             "restatement": "restatement",
             "guidance": "guidance",
@@ -80,7 +84,22 @@ class FilingEventExtractor:
         missing = required.difference(payload)
         if missing:
             raise ValueError(f"Missing filing extraction keys: {sorted(missing)}")
+        if not isinstance(payload["event_tag"], str):
+            raise ValueError("event_tag must be a string")
+        if not isinstance(payload["risk_flag"], bool):
+            raise ValueError("risk_flag must be a boolean")
+        if not isinstance(payload["confidence"], int | float):
+            raise ValueError("confidence must be numeric")
+        if not 0 <= float(payload["confidence"]) <= 1:
+            raise ValueError("confidence must be between 0 and 1")
+        if not isinstance(payload["summary_ref"], str):
+            raise ValueError("summary_ref must be a string")
         return payload
+
+
+@dataclass
+class FinGPTEventExtractor(FilingEventExtractor):
+    model_id: str = "AI4Finance-Foundation/FinGPT"
 
 
 def _stable_summary_ref(text: str) -> str:
