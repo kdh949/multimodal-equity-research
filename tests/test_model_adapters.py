@@ -199,6 +199,30 @@ def test_tabular_model_fallback_schema_when_lightgbm_is_absent(monkeypatch) -> N
     } <= set(predictions.columns)
 
 
+def test_tabular_model_falls_back_when_lightgbm_native_library_fails(monkeypatch) -> None:
+    class BrokenLightGBM(types.ModuleType):
+        def __getattr__(self, name):
+            if name == "LGBMRegressor":
+                raise OSError("libomp.dylib missing")
+            raise AttributeError(name)
+
+    monkeypatch.setitem(sys.modules, "lightgbm", BrokenLightGBM("lightgbm"))
+    train = pd.DataFrame(
+        {
+            "date": pd.date_range("2026-01-01", periods=40, freq="D"),
+            "ticker": ["AAPL"] * 40,
+            "volatility_20": [0.02] * 40,
+            "return_5": [0.001] * 40,
+            "return_20": [0.002] * 40,
+            "forward_return_1": [0.001] * 40,
+        }
+    )
+
+    model = TabularReturnModel(model_name="lightgbm", random_state=7).fit(train)
+
+    assert model.actual_model_name == "HistGradientBoostingRegressor"
+
+
 def test_finbert_uses_no_network_fallback_contract(monkeypatch) -> None:
     fake_transformers = types.ModuleType("transformers")
 
@@ -244,6 +268,8 @@ def test_finma_local_generation_output_is_validated(monkeypatch) -> None:
         "confidence": 0.82,
         "summary_ref": "guidance risk",
     }
+    assert extractor.last_source == "local"
+    assert extractor.last_error is None
 
 
 def test_fingpt_local_generation_falls_back_to_rules_on_bad_json(monkeypatch) -> None:
@@ -254,6 +280,8 @@ def test_fingpt_local_generation_falls_back_to_rules_on_bad_json(monkeypatch) ->
 
     assert result["event_tag"] != "none"
     assert result["risk_flag"] is True
+    assert extractor.last_source == "rules"
+    assert "ValueError" in str(extractor.last_error)
 
 
 def test_ollama_agent_falls_back_when_server_unreachable(monkeypatch) -> None:

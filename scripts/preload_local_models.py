@@ -40,6 +40,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--cache-dir", type=Path, default=None, help="Optional Hugging Face cache directory.")
     parser.add_argument("--local-files-only", action="store_true", help="Do not contact Hugging Face.")
     parser.add_argument("--device-map", default="auto", help="Transformers/Chronos device map.")
+    parser.add_argument("--offload-folder", type=Path, default=Path("artifacts/model_offload"))
+    parser.add_argument("--max-new-tokens", type=int, default=192)
     parser.add_argument("--chronos-id", default="amazon/chronos-2")
     parser.add_argument("--granite-id", default="ibm-granite/granite-timeseries-ttm-r2")
     parser.add_argument("--granite-revision", default=None)
@@ -111,22 +113,36 @@ def _warmup_selected(args: argparse.Namespace, selected: dict[str, bool]) -> Non
         ).add_local_forecasts(sample, min_context=16, max_inference_windows=1)
         _print_columns(output, "Granite TTM", "granite_ttm_expected_return", "granite_ttm_confidence")
     if selected["finma"]:
-        output = FilingEventExtractor(
+        args.offload_folder.mkdir(parents=True, exist_ok=True)
+        extractor = FilingEventExtractor(
             model_id=args.finma_id,
             use_local_model=True,
             device_map=args.device_map,
             local_files_only=args.local_files_only,
-        ).extract("Form 8-K material earnings guidance update with potential legal risk.")
+            offload_folder=str(args.offload_folder),
+            max_new_tokens=args.max_new_tokens,
+        )
+        output = extractor.extract("Form 8-K material earnings guidance update with potential legal risk.")
         print(f"FinMA: {output}")
+        print(f"FinMA source: {extractor.last_source}")
+        if extractor.last_error:
+            print(f"FinMA fallback error: {extractor.last_error}")
     if selected["fingpt"]:
-        output = FinGPTEventExtractor(
+        args.offload_folder.mkdir(parents=True, exist_ok=True)
+        extractor = FinGPTEventExtractor(
             model_id=args.fingpt_id,
             base_model_id=args.fingpt_base_id,
             use_local_model=True,
             device_map=args.device_map,
             local_files_only=args.local_files_only,
-        ).extract("Form 8-K material earnings guidance update with potential legal risk.")
+            offload_folder=str(args.offload_folder),
+            max_new_tokens=args.max_new_tokens,
+        )
+        output = extractor.extract("Form 8-K material earnings guidance update with potential legal risk.")
         print(f"FinGPT: {output}")
+        print(f"FinGPT source: {extractor.last_source}")
+        if extractor.last_error:
+            print(f"FinGPT fallback error: {extractor.last_error}")
 
 
 def _sample_features() -> pd.DataFrame:

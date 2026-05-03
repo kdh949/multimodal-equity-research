@@ -64,6 +64,7 @@ class PipelineConfig:
     granite_ttm_model_id: str = "ibm-granite/granite-timeseries-ttm-r2"
     granite_ttm_revision: str | None = None
     local_model_device_map: str = "auto"
+    local_model_offload_folder: str | None = "artifacts/model_offload"
     filing_extractor_model: str = "rules"
     enable_local_filing_llm: bool = False
     finma_model_id: str = "ChanceFocus/finma-7b-nlp"
@@ -270,6 +271,7 @@ def _filing_extractor(config: PipelineConfig):
             model_id=config.finma_model_id,
             use_local_model=config.enable_local_filing_llm,
             device_map=config.local_model_device_map,
+            offload_folder=config.local_model_offload_folder,
         )
     if model_name == "fingpt":
         return FinGPTEventExtractor(
@@ -277,6 +279,7 @@ def _filing_extractor(config: PipelineConfig):
             use_local_model=config.enable_local_filing_llm,
             device_map=config.local_model_device_map,
             base_model_id=config.fingpt_base_model_id,
+            offload_folder=config.local_model_offload_folder,
         )
     return FilingEventExtractor(use_local_model=False)
 

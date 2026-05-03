@@ -60,6 +60,7 @@ uv --cache-dir .uv-cache run python scripts/preload_local_models.py --fingpt --m
 ```
 
 Streamlit 사이드바에서 `Time-series inference=local`, `Filing extractor=finma|fingpt`, `Use local filing LLM`을 켜면 실제 로컬 어댑터를 호출한다. FinGPT는 LoRA adapter라 base model 접근 권한과 `HF_TOKEN` 또는 Hugging Face 로그인 상태가 필요할 수 있다.
+7B 계열 모델이 메모리 부족으로 disk offload를 사용할 때는 `--offload-folder artifacts/model_offload`와 `--max-new-tokens`로 warmup 비용을 조절한다.
 
 ## 기본 종목군
 

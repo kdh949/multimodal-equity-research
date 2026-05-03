@@ -71,3 +71,4 @@ uv --cache-dir .uv-cache run python scripts/preload_local_models.py --fingpt --m
 ```
 
 이미 캐시된 모델만 검증하려면 `--local-files-only --mode warmup`을 붙인다. 이 경로는 실제 모델 파일과 런타임 환경에서만 완전히 검증된다.
+FinMA/FinGPT 같은 7B 계열 모델은 `--offload-folder artifacts/model_offload`로 disk offload를 허용한다. warmup 출력의 `source`가 `local`이면 모델 JSON이 검증을 통과한 것이고, `rules`면 모델 오류 또는 JSON 스키마 실패 후 deterministic fallback이 사용된 것이다.

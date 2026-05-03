@@ -38,6 +38,7 @@ with st.sidebar:
     enable_local_filing_llm = st.checkbox("Use local filing LLM", value=False)
     with st.expander("Local model settings"):
         local_model_device_map = st.text_input("Device map", value="auto")
+        local_model_offload_folder = st.text_input("Offload folder", value="artifacts/model_offload")
         chronos_model_id = st.text_input("Chronos-2 model", value="amazon/chronos-2")
         granite_ttm_model_id = st.text_input(
             "Granite TTM model",
@@ -81,6 +82,7 @@ config = PipelineConfig(
     granite_ttm_model_id=granite_ttm_model_id,
     granite_ttm_revision=granite_ttm_revision or None,
     local_model_device_map=local_model_device_map,
+    local_model_offload_folder=local_model_offload_folder or None,
     filing_extractor_model=filing_extractor_model,
     enable_local_filing_llm=enable_local_filing_llm,
     finma_model_id=finma_model_id,

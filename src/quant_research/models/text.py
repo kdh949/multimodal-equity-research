@@ -55,16 +55,23 @@ class FilingEventExtractor:
     device_map: str = "auto"
     local_files_only: bool = False
     trust_remote_code: bool = False
+    offload_folder: str | None = None
     max_new_tokens: int = 192
     _tokenizer: Any = field(default=None, init=False, repr=False)
     _model: Any = field(default=None, init=False, repr=False)
+    last_source: str = field(default="rules", init=False)
+    last_error: str | None = field(default=None, init=False)
 
     def extract(self, text: str) -> dict[str, object]:
         if self.use_local_model:
             try:
-                return self.validate_json(self._generate_with_local_model(text))
-            except Exception:
-                pass
+                payload = self.validate_json(self._generate_with_local_model(text))
+                self.last_source = "local"
+                self.last_error = None
+                return payload
+            except Exception as exc:
+                self.last_error = f"{type(exc).__name__}: {exc}"
+        self.last_source = "rules"
         return self.extract_with_rules(text)
 
     def extract_with_rules(self, text: str) -> dict[str, object]:
@@ -135,10 +142,10 @@ class FilingEventExtractor:
             kwargs = _from_pretrained_kwargs(self.local_files_only, self.trust_remote_code)
             self._tokenizer = AutoTokenizer.from_pretrained(self.model_id, **kwargs)
             _ensure_pad_token(self._tokenizer)
+            model_kwargs = _model_from_pretrained_kwargs(self.device_map, self.offload_folder, kwargs)
             self._model = AutoModelForCausalLM.from_pretrained(
                 self.model_id,
-                device_map=self.device_map,
-                **kwargs,
+                **model_kwargs,
             )
         return self._tokenizer, self._model
 
@@ -156,21 +163,20 @@ class FinGPTEventExtractor(FilingEventExtractor):
             kwargs = _from_pretrained_kwargs(self.local_files_only, self.trust_remote_code)
             self._tokenizer = AutoTokenizer.from_pretrained(tokenizer_id, **kwargs)
             _ensure_pad_token(self._tokenizer)
+            model_kwargs = _model_from_pretrained_kwargs(self.device_map, self.offload_folder, kwargs)
             if self.base_model_id:
                 from peft import PeftModel
 
                 base = AutoModelForCausalLM.from_pretrained(
                     self.base_model_id,
-                    device_map=self.device_map,
-                    **kwargs,
+                    **model_kwargs,
                 )
                 peft_kwargs = {"local_files_only": True} if self.local_files_only else {}
                 self._model = PeftModel.from_pretrained(base, self.model_id, **peft_kwargs)
             else:
                 self._model = AutoModelForCausalLM.from_pretrained(
                     self.model_id,
-                    device_map=self.device_map,
-                    **kwargs,
+                    **model_kwargs,
                 )
         return self._tokenizer, self._model
 
@@ -206,6 +212,17 @@ def _from_pretrained_kwargs(local_files_only: bool, trust_remote_code: bool) -> 
         kwargs["local_files_only"] = True
     if trust_remote_code:
         kwargs["trust_remote_code"] = True
+    return kwargs
+
+
+def _model_from_pretrained_kwargs(
+    device_map: str,
+    offload_folder: str | None,
+    base_kwargs: dict[str, object],
+) -> dict[str, object]:
+    kwargs = {"device_map": device_map, **base_kwargs}
+    if offload_folder:
+        kwargs["offload_folder"] = offload_folder
     return kwargs
 
 
