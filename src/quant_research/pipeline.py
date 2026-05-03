@@ -68,8 +68,8 @@ class PipelineConfig:
     filing_extractor_model: str = "rules"
     enable_local_filing_llm: bool = False
     finma_model_id: str = "ChanceFocus/finma-7b-nlp"
-    fingpt_model_id: str = "FinGPT/fingpt-mt_llama3-8b_lora"
-    fingpt_base_model_id: str | None = "meta-llama/Meta-Llama-3-8B"
+    fingpt_model_id: str = "FinGPT/fingpt-mt_llama2-7b_lora"
+    fingpt_base_model_id: str | None = "meta-llama/Llama-2-7b-hf"
     max_symbol_weight: float = 0.35
     portfolio_volatility_limit: float = 0.04
     max_drawdown_stop: float = 0.20

@@ -43,5 +43,7 @@ def test_fingpt_adapter_uses_same_structured_contract() -> None:
 
     result = extractor.extract("Form 8-K material guidance risk update")
 
+    assert extractor.model_id == "FinGPT/fingpt-mt_llama2-7b_lora"
+    assert extractor.base_model_id == "meta-llama/Llama-2-7b-hf"
     assert {"event_tag", "risk_flag", "confidence", "summary_ref"} == set(result)
     assert result["risk_flag"] is True

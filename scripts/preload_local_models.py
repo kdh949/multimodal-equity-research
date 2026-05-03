@@ -9,6 +9,24 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+FINGPT_PROFILES = {
+    "mt-llama2": {
+        "adapter": "FinGPT/fingpt-mt_llama2-7b_lora",
+        "base": "meta-llama/Llama-2-7b-hf",
+        "description": "Official FinGPT multi-task Llama-2 7B LoRA profile.",
+    },
+    "forecaster": {
+        "adapter": "FinGPT/fingpt-forecaster_dow30_llama2-7b_lora",
+        "base": "meta-llama/Llama-2-7b-chat-hf",
+        "description": "Official FinGPT-Forecaster DOW30 Llama-2 7B chat LoRA profile.",
+    },
+    "sentiment-v3": {
+        "adapter": "FinGPT/fingpt-sentiment_llama2-13b_lora",
+        "base": "NousResearch/Llama-2-13b-hf",
+        "description": "Official FinGPT v3.3 sentiment Llama-2 13B LoRA profile.",
+    },
+}
+
 
 def main() -> int:
     args = _parse_args()
@@ -16,8 +34,8 @@ def main() -> int:
     if not any(selected.values()):
         print("Select at least one model with --chronos, --granite, --finma, --fingpt, or --all.")
         return 2
-    if selected["fingpt"] and not args.fingpt_base_id:
-        print("FinGPT LoRA inference requires --fingpt-base-id, for example meta-llama/Meta-Llama-3-8B.")
+    if selected["fingpt"] and args.mode == "warmup" and args.fingpt_adapter_only:
+        print("FinGPT warmup requires a base model; remove --fingpt-adapter-only.")
         return 2
 
     if args.mode == "download":
@@ -46,8 +64,19 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--granite-id", default="ibm-granite/granite-timeseries-ttm-r2")
     parser.add_argument("--granite-revision", default=None)
     parser.add_argument("--finma-id", default="ChanceFocus/finma-7b-nlp")
-    parser.add_argument("--fingpt-id", default="FinGPT/fingpt-mt_llama3-8b_lora")
-    parser.add_argument("--fingpt-base-id", default="meta-llama/Meta-Llama-3-8B")
+    parser.add_argument("--fingpt-profile", choices=sorted(FINGPT_PROFILES), default="mt-llama2")
+    parser.add_argument("--fingpt-id", default=None, help="Override the selected FinGPT LoRA adapter.")
+    parser.add_argument("--fingpt-base-id", default=None, help="Override the selected FinGPT base model.")
+    parser.add_argument(
+        "--fingpt-adapter-only",
+        action="store_true",
+        help="Download only the FinGPT LoRA adapter. Warmup still requires a base model.",
+    )
+    parser.add_argument(
+        "--fail-on-fingpt-base-error",
+        action="store_true",
+        help="Fail the command if the gated FinGPT base model cannot be downloaded.",
+    )
     return parser.parse_args()
 
 
@@ -73,8 +102,18 @@ def _download_selected(args: argparse.Namespace, selected: dict[str, bool]) -> N
     if selected["finma"]:
         _snapshot_download(args.finma_id, args.cache_dir, args.local_files_only)
     if selected["fingpt"]:
-        _snapshot_download(args.fingpt_base_id, args.cache_dir, args.local_files_only)
-        _snapshot_download(args.fingpt_id, args.cache_dir, args.local_files_only)
+        adapter_id, base_id, profile_description = _resolve_fingpt_model_ids(args)
+        print(f"FinGPT profile: {args.fingpt_profile} ({profile_description})")
+        if args.fingpt_adapter_only:
+            print("Skipping FinGPT base model download because --fingpt-adapter-only was set.")
+        elif base_id:
+            try:
+                _snapshot_download(base_id, args.cache_dir, args.local_files_only)
+            except Exception as exc:
+                print(f"FinGPT base download failed: {type(exc).__name__}: {exc}")
+                if args.fail_on_fingpt_base_error:
+                    raise
+        _snapshot_download(adapter_id, args.cache_dir, args.local_files_only)
 
 
 def _snapshot_download(
@@ -128,10 +167,12 @@ def _warmup_selected(args: argparse.Namespace, selected: dict[str, bool]) -> Non
         if extractor.last_error:
             print(f"FinMA fallback error: {extractor.last_error}")
     if selected["fingpt"]:
+        adapter_id, base_id, profile_description = _resolve_fingpt_model_ids(args)
+        print(f"FinGPT profile: {args.fingpt_profile} ({profile_description})")
         args.offload_folder.mkdir(parents=True, exist_ok=True)
         extractor = FinGPTEventExtractor(
-            model_id=args.fingpt_id,
-            base_model_id=args.fingpt_base_id,
+            model_id=adapter_id,
+            base_model_id=base_id,
             use_local_model=True,
             device_map=args.device_map,
             local_files_only=args.local_files_only,
@@ -143,6 +184,13 @@ def _warmup_selected(args: argparse.Namespace, selected: dict[str, bool]) -> Non
         print(f"FinGPT source: {extractor.last_source}")
         if extractor.last_error:
             print(f"FinGPT fallback error: {extractor.last_error}")
+
+
+def _resolve_fingpt_model_ids(args: argparse.Namespace) -> tuple[str, str | None, str]:
+    profile = FINGPT_PROFILES[args.fingpt_profile]
+    adapter_id = args.fingpt_id or str(profile["adapter"])
+    base_id = args.fingpt_base_id or str(profile["base"])
+    return adapter_id, base_id, str(profile["description"])
 
 
 def _sample_features() -> pd.DataFrame:

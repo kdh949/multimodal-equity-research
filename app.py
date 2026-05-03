@@ -46,8 +46,8 @@ with st.sidebar:
         )
         granite_ttm_revision = st.text_input("Granite revision", value="")
         finma_model_id = st.text_input("FinMA model", value="ChanceFocus/finma-7b-nlp")
-        fingpt_model_id = st.text_input("FinGPT adapter", value="FinGPT/fingpt-mt_llama3-8b_lora")
-        fingpt_base_model_id = st.text_input("FinGPT base model", value="meta-llama/Meta-Llama-3-8B")
+        fingpt_model_id = st.text_input("FinGPT adapter", value="FinGPT/fingpt-mt_llama2-7b_lora")
+        fingpt_base_model_id = st.text_input("FinGPT base model", value="meta-llama/Llama-2-7b-hf")
     max_symbol_weight = st.slider("Max symbol weight", min_value=0.05, max_value=1.0, value=0.35, step=0.05)
     portfolio_volatility_limit = st.slider(
         "Portfolio volatility limit",
