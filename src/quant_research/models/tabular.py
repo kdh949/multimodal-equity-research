@@ -83,7 +83,7 @@ def _make_estimator(model_name: str, random_state: int) -> object:
                 random_state=random_state,
                 verbose=-1,
             )
-        except ImportError:
+        except Exception:
             pass
     if normalized == "xgboost":
         try:
@@ -98,7 +98,7 @@ def _make_estimator(model_name: str, random_state: int) -> object:
                 random_state=random_state,
                 objective="reg:squarederror",
             )
-        except ImportError:
+        except Exception:
             pass
     if normalized == "catboost":
         try:
@@ -111,7 +111,7 @@ def _make_estimator(model_name: str, random_state: int) -> object:
                 random_seed=random_state,
                 verbose=False,
             )
-        except ImportError:
+        except Exception:
             pass
     return HistGradientBoostingRegressor(max_iter=160, learning_rate=0.04, random_state=random_state)
 

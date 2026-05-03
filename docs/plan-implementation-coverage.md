@@ -27,11 +27,11 @@ Legend: **Implemented / Partial / Remaining**
 
 | Item | Status | Evidence |
 | --- | --- | --- |
-| Chronos-2 (return/vol/quantile 후보) | Partial | [Chronos2Adapter](/Users/donghyunkim/Documents/Quantitative-Trading/src/quant_research/models/timeseries.py:10) only adds proxy features and does not invoke 실제 챗봇/모델 추론 |
-| Granite TTM adapter | Partial | [GraniteTTMAdapter](/Users/donghyunkim/Documents/Quantitative-Trading/src/quant_research/models/timeseries.py:33) is proxy/feature-only implementation |
+| Chronos-2 (return/vol/quantile 후보) | Implemented | [Chronos2Adapter](/Users/donghyunkim/Documents/Quantitative-Trading/src/quant_research/models/timeseries.py:10) supports proxy and local `Chronos2Pipeline.predict_df` inference with quantile normalization |
+| Granite TTM adapter | Implemented | [GraniteTTMAdapter](/Users/donghyunkim/Documents/Quantitative-Trading/src/quant_research/models/timeseries.py:109) supports proxy and local `TinyTimeMixerForecaster` inference |
 | LightGBM baseline 우선순위 + XGBoost/CatBoost + fallback | Implemented | [_make_estimator](/Users/donghyunkim/Documents/Quantitative-Trading/src/quant_research/models/tabular.py:71), model fallback chain 및 `HistGradientBoostingRegressor` fallback |
 | FinBERT sentiment | Partial | [FinBERTSentimentAnalyzer](/Users/donghyunkim/Documents/Quantitative-Trading/src/quant_research/models/text.py:12) uses transformers fallback to keyword analyzer |
-| FinMA / FinGPT event extraction | Partial | [FilingEventExtractor](/Users/donghyunkim/Documents/Quantitative-Trading/src/quant_research/models/text.py:52), [FinGPTEventExtractor](/Users/donghyunkim/Documents/Quantitative-Trading/src/quant_research/models/text.py:101) are rule-based/shared-contract, not live model adapters |
+| FinMA / FinGPT event extraction | Implemented | [FilingEventExtractor](/Users/donghyunkim/Documents/Quantitative-Trading/src/quant_research/models/text.py:45), [FinGPTEventExtractor](/Users/donghyunkim/Documents/Quantitative-Trading/src/quant_research/models/text.py:146) support local Transformers/PEFT generation, JSON schema validation, and deterministic fallback |
 | Ollama local model for explanation/summary | Implemented | [OllamaAgent](/Users/donghyunkim/Documents/Quantitative-Trading/src/quant_research/models/ollama.py:9) with default `qwen3-coder:30b` |
 | 구조화 feature 저장 (sentiment_score/event_tag/risk_flag/confidence/summary_ref) | Implemented | Text path: [KeywordSentimentAnalyzer](/Users/donghyunkim/Documents/Quantitative-Trading/src/quant_research/features/text.py:50), [news aggregation](/Users/donghyunkim/Documents/Quantitative-Trading/src/quant_research/features/text.py:70), SEC path: [FilingEventExtractor](/Users/donghyunkim/Documents/Quantitative-Trading/src/quant_research/models/text.py:55), [sec features](/Users/donghyunkim/Documents/Quantitative-Trading/src/quant_research/features/sec.py:62), [pipeline attach](/Users/donghyunkim/Documents/Quantitative-Trading/src/quant_research/pipeline.py:187) |
 
@@ -56,7 +56,7 @@ Legend: **Implemented / Partial / Remaining**
 | 텍스트/LLM 출력 스키마 검증 | Implemented | [test_finbert_fallback_returns_structured_schema](/Users/donghyunkim/Documents/Quantitative-Trading/tests/test_text_models.py:14), [test_filing_event_extractor_validates_schema](/Users/donghyunkim/Documents/Quantitative-Trading/tests/test_text_models.py:26) |
 | signal engine BUY/SELL/HOLD 규칙 | Implemented | [test_signal_engine_buys_only_after_risk_checks](/Users/donghyunkim/Documents/Quantitative-Trading/tests/test_signal_engine.py:8), [test_signal_engine_blocks_low_liquidity](/Users/donghyunkim/Documents/Quantitative-Trading/tests/test_signal_engine.py:31) |
 | 통합 파이프라인 + walk-forward smoke | Implemented | [test_synthetic_pipeline_runs_end_to_end](/Users/donghyunkim/Documents/Quantitative-Trading/tests/test_pipeline.py:6), [test_backtest_*](/Users/donghyunkim/Documents/Quantitative-Trading/tests/test_backtest_risk.py:8) |
-| 성능 비교/모델별 개선/안정성 지표(Chronos/TTM/기본) | Partial | 비용/텍스트/SEC ablation과 Chronos/Granite proxy feature 제거 비교는 구현됨([pipeline](/Users/donghyunkim/Documents/Quantitative-Trading/src/quant_research/pipeline.py:223)). 다만 실제 Chronos-2/Granite 모델 추론 기반 통계 검정과 장기 OOS 안정성 리포트는 아직 proxy 수준 |
+| 성능 비교/모델별 개선/안정성 지표(Chronos/TTM/기본) | Partial | 비용/텍스트/SEC ablation과 Chronos/Granite feature 제거 비교는 구현됨([pipeline](/Users/donghyunkim/Documents/Quantitative-Trading/src/quant_research/pipeline.py:250)). 실제 heavy model OOS 개선 여부는 로컬 모델 다운로드 후 동일 ablation으로 검증해야 함 |
 
 ## 6) SEC 규칙 준수
 
@@ -74,6 +74,6 @@ Legend: **Implemented / Partial / Remaining**
 
 ## Remaining priority (to fully match PLAN)
 
-1. 실제 추론 파이프라인으로 Chronos-2 / Granite TTM / FinMA / FinGPT를 선택적 Adapter로 추가 (현재는 대체로 proxy/fallback 기반).
+1. 로컬 모델 다운로드 환경에서 `scripts/preload_local_models.py --mode warmup`을 실행해 실제 Chronos-2 / Granite TTM / FinMA / FinGPT 런타임을 검증.
 2. 텍스트·SEC feature 타이밍(특히 이벤트 발생-적용 lag)과 공개 시점 기준 반영을 더 엄격하게 문서-코드 동기화.
-3. 성능 계획 대비 항목인 실제 모델 추론 기반 비교/개선 분석(Chronos-2/Granite TTM/기본 모델, OOS score stability)을 리포트 형태로 정규화.
+3. 실제 모델 추론 기반 비교/개선 분석(Chronos-2/Granite TTM/기본 모델, OOS score stability)을 리포트 형태로 정규화.

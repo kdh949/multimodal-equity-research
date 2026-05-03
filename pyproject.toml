@@ -25,15 +25,34 @@ nlp = [
   "torch>=2.5",
   "transformers>=4.46",
 ]
+timeseries = [
+  "chronos-forecasting>=2.0",
+  "huggingface-hub>=0.26",
+  "sktime>=0.35",
+]
+llm = [
+  "accelerate>=1.1",
+  "huggingface-hub>=0.26",
+  "peft>=0.13",
+  "sentencepiece>=0.2",
+  "torch>=2.5",
+  "transformers>=4.46",
+]
 dev = [
   "pytest>=8.3",
   "ruff>=0.8",
 ]
 all = [
+  "accelerate>=1.1",
   "catboost>=1.2",
+  "chronos-forecasting>=2.0",
+  "huggingface-hub>=0.26",
   "lightgbm>=4.5",
+  "peft>=0.13",
   "pytest>=8.3",
   "ruff>=0.8",
+  "sentencepiece>=0.2",
+  "sktime>=0.35",
   "torch>=2.5",
   "transformers>=4.46",
   "xgboost>=2.1",
