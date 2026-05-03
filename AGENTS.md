@@ -19,6 +19,15 @@
 - LightGBM이 없으면 scikit-learn gradient boosting fallback을 사용한다.
 - 텍스트 모델 출력은 자유 서술 대신 `sentiment_score`, `event_tag`, `risk_flag`, `confidence`, `summary_ref` 같은 구조화 feature로 저장한다.
 
+## Parallel Agent Development
+
+- 작업을 병렬로 나눌 수 있고, 각 작업이 간단하며 GPT-5.3-Codex-Spark가 구현하기 적합한 범위라면 여러 개의 멀티 에이전트를 생성해 개발해도 된다.
+- 병렬 에이전트에는 `GPT-5.3-Codex-Spark` 모델과 매우 높은 추론 성능 설정을 우선 사용한다.
+- 병렬화는 파일/모듈 소유권이 분리되는 경우에만 사용한다. 예: provider 테스트, 모델 adapter 테스트, 문서 보강처럼 write scope가 서로 겹치지 않는 작업.
+- 각 에이전트에게는 담당 파일 또는 담당 서브시스템을 명확히 지정하고, 다른 에이전트나 사용자의 변경을 되돌리지 말라고 지시한다.
+- 설계 판단, 공통 인터페이스 변경, 충돌 가능성이 큰 통합 작업, 리스크/검증 의미가 바뀌는 작업은 메인 에이전트가 직접 처리한다.
+- 병렬 에이전트 결과는 메인 에이전트가 최종 리뷰, 통합, 테스트, 커밋 정리를 수행한 뒤 반영한다.
+
 ## Validation Flow
 
 1. 모델이 수익률, 변동성, 분위수, 텍스트 리스크 예측값을 생성한다.
