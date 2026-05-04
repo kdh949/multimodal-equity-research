@@ -42,6 +42,11 @@ with st.sidebar:
     )
     filing_extractor_model = st.selectbox("Filing extractor", ["rules", "finma", "fingpt"], index=0)
     enable_local_filing_llm = st.checkbox("Use local filing LLM", value=False)
+    defaults = PipelineConfig()
+    fingpt_runtime_options = ("transformers", "mlx", "llama-cpp")
+    fingpt_default_runtime = defaults.fingpt_runtime
+    if fingpt_default_runtime not in fingpt_runtime_options:
+        fingpt_default_runtime = "transformers"
     with st.expander("Local model settings"):
         local_model_device_map = st.text_input("Device map", value="auto")
         local_model_offload_folder = st.text_input("Offload folder", value="artifacts/model_offload")
@@ -54,6 +59,29 @@ with st.sidebar:
         finma_model_id = st.text_input("FinMA model", value="ChanceFocus/finma-7b-nlp")
         fingpt_model_id = st.text_input("FinGPT adapter", value="FinGPT/fingpt-mt_llama3-8b_lora")
         fingpt_base_model_id = st.text_input("FinGPT base model", value="meta-llama/Meta-Llama-3-8B")
+        fingpt_runtime = st.selectbox(
+            "FinGPT runtime",
+            options=fingpt_runtime_options,
+            index=fingpt_runtime_options.index(fingpt_default_runtime),
+            help="Transformers loads only base LoRA flow; MLX/llama-cpp requires a local quantized file path.",
+        )
+        fingpt_quantized_model_path = st.text_input(
+            "FinGPT quantized runtime path",
+            value=defaults.fingpt_quantized_model_path,
+            help="Warmup and inference are optional heavy steps; keep blank if you do not use quantized runtime.",
+        )
+        fingpt_allow_unquantized_transformers = st.checkbox(
+            "Allow unquantized Transformers 8B load",
+            value=defaults.fingpt_allow_unquantized_transformers,
+            help=(
+                "Only enable for explicit local experiments; keeps default safety guard off when false."
+            ),
+        )
+        fingpt_single_load_lock_path = st.text_input(
+            "FinGPT single-load lock file",
+            value=defaults.fingpt_single_load_lock_path or "",
+            help="Limits concurrent FinGPT local model load attempts to one at a time.",
+        )
     max_symbol_weight = st.slider("Max symbol weight", min_value=0.05, max_value=1.0, value=0.35, step=0.05)
     portfolio_volatility_limit = st.slider(
         "Portfolio volatility limit",
@@ -96,6 +124,10 @@ config = PipelineConfig(
     finma_model_id=finma_model_id,
     fingpt_model_id=fingpt_model_id,
     fingpt_base_model_id=fingpt_base_model_id or None,
+    fingpt_runtime=fingpt_runtime,
+    fingpt_quantized_model_path=fingpt_quantized_model_path,
+    fingpt_allow_unquantized_transformers=fingpt_allow_unquantized_transformers,
+    fingpt_single_load_lock_path=fingpt_single_load_lock_path or None,
     max_symbol_weight=max_symbol_weight,
     portfolio_volatility_limit=portfolio_volatility_limit,
     max_drawdown_stop=max_drawdown_stop,

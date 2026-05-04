@@ -36,9 +36,13 @@ def test_streamlit_app_renders_beginner_dashboard_in_synthetic_mode() -> None:
 
     assert not app.exception
 
-    assert app.selectbox[0].value == "synthetic"
-    assert app.selectbox[2].value == "keyword"
-    assert app.selectbox[4].value == "rules"
+    data_mode_select = next(node for node in app.selectbox if node.label == "Data mode")
+    sentiment_select = next(node for node in app.selectbox if node.label == "Sentiment model")
+    filing_extractor_select = next(node for node in app.selectbox if node.label == "Filing extractor")
+
+    assert data_mode_select.value == "synthetic"
+    assert sentiment_select.value == "keyword"
+    assert filing_extractor_select.value == "rules"
 
     markdown_values = [str(markdown.value) for markdown in app.markdown]
     caption_values = [str(caption.value) for caption in app.caption]
@@ -65,6 +69,13 @@ def test_streamlit_app_renders_beginner_dashboard_in_synthetic_mode() -> None:
     assert any("Backtest Validation Snapshot" in subheader.value for subheader in app.subheader)
     assert any("Validation Metrics" in markdown for markdown in markdown_values)
     assert {"CAGR", "Sharpe", "Max DD", "Hit Rate", "Exposure", "Turnover"}.issubset(metric_labels)
+
+    runtime_options = [node.value for node in app.selectbox if node.label == "FinGPT runtime"]
+    assert runtime_options and runtime_options[0] in {"transformers", "mlx", "llama-cpp"}
+    assert any(
+        node.label == "Allow unquantized Transformers 8B load" and node.value is False for node in app.checkbox
+    )
+    assert any(node.label == "FinGPT quantized runtime path" for node in app.text_input)
 
     forecast_column = app.main.children[4].children[0]
     forecast_nodes = _child_nodes(forecast_column)

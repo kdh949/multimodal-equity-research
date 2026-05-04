@@ -50,7 +50,8 @@ uv --cache-dir .uv-cache run pytest
 
 ## 로컬 heavy model 추론
 
-기본 실행은 `proxy`/`rules` fallback으로 빠르게 동작한다. 실제 Chronos-2, Granite TTM, FinMA, FinGPT 로컬 추론을 쓰려면 optional dependency와 Hugging Face 모델 캐시가 필요하다.
+기본 실행은 `proxy`/`rules` fallback으로 빠르게 동작한다. 기본적으로는 **다운로드/캐시 없는 경량 모드**로 시작되어 실제 추론을 트리거하지 않는다.
+실제 Chronos-2, Granite TTM, FinMA, FinGPT를 쓰려면 optional dependency와 Hugging Face 모델 캐시가 필요하다.
 
 ```bash
 uv --cache-dir .uv-cache sync --all-extras
@@ -60,7 +61,14 @@ uv --cache-dir .uv-cache run python scripts/preload_local_models.py --fingpt --m
 uv --cache-dir .uv-cache run python scripts/preload_local_models.py --fingpt --mode download --fingpt-profile forecaster --fingpt-adapter-only
 ```
 
-Streamlit 사이드바에서 `Time-series inference=local`, `Filing extractor=finma|fingpt`, `Use local filing LLM`을 켜면 실제 로컬 어댑터를 호출한다. FinGPT는 공식 repo의 base model + LoRA adapter 구조를 따른다. `mt-llama3` 기본 profile은 `FinGPT/fingpt-mt_llama3-8b_lora`와 `meta-llama/Meta-Llama-3-8B`를 사용하고, 이전 `mt-llama2` profile도 명시적으로 선택할 수 있다. Forecaster profile은 `FinGPT/fingpt-forecaster_dow30_llama2-7b_lora`와 `meta-llama/Llama-2-7b-chat-hf`를 사용한다. Meta Llama base model은 접근 권한과 `HF_TOKEN` 또는 Hugging Face 로그인 상태가 필요할 수 있다.
+Streamlit 사이드바에서 `Time-series inference=local`, `Filing extractor=finma|fingpt`, `Use local filing LLM`을 켜면 실제 로컬 어댑터를 호출한다. 기본 FinGPT 경로는 `rules`/`keyword`이고, 경량 모드는 그대로 유지된다.
+
+FinGPT는 공식 repo의 base model + LoRA adapter 구조를 따른다. `mt-llama3` 기본 profile은 `FinGPT/fingpt-mt_llama3-8b_lora`와 `meta-llama/Meta-Llama-3-8B`를 사용한다.
+`FinGPT base model`은 접근 권한과 `HF_TOKEN` 또는 Hugging Face 로그인 상태가 필요할 수 있다.
+
+`Local model settings`에는 런타임 전용 경로가 추가되며, mac 기준 기본 런타임은 MLX/llama.cpp 계열 양자화 경로(`artifacts/model_cache/...q4...`)를 선호한다.
+무거운 warmup/추론은 선택적 동작이며, 기본 `Allow unquantized Transformers 8B load`는 꺼져 있어서 기본 보안 가드를 유지한다.
+단일 장비에서 로컬 모델을 동시에 여러 번 적재하지 않도록 `FinGPT single-load lock file`이 기본으로 준비되어 있다.
 7B 계열 모델이 메모리 부족으로 disk offload를 사용할 때는 `--offload-folder artifacts/model_offload`와 `--max-new-tokens`로 warmup 비용을 조절한다.
 
 ## 기본 종목군
