@@ -132,24 +132,24 @@ with tabs[0]:
 with tabs[1]:
     st.subheader("Latest Deterministic Signals")
     latest_date = result.signals["date"].max()
+    signal_columns = [
+        "date",
+        "ticker",
+        "action",
+        "signal_score",
+        "expected_return",
+        "predicted_volatility",
+        "downside_quantile",
+        "text_risk_score",
+        "sec_risk_flag",
+    ]
     latest = (
         result.signals[result.signals["date"] == latest_date]
         .sort_values("signal_score", ascending=False)
         .reset_index(drop=True)
     )
     st.dataframe(
-        latest[
-            [
-                "date",
-                "ticker",
-                "signal_score",
-                "expected_return",
-                "predicted_volatility",
-                "downside_quantile",
-                "text_risk_score",
-                "sec_risk_flag",
-            ]
-        ],
+        latest[[col for col in signal_columns if col in latest.columns]],
         use_container_width=True,
         hide_index=True,
     )
