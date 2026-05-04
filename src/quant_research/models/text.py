@@ -1,11 +1,28 @@
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import json
+import os
 import re
+import tempfile
+import threading
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from quant_research.features.text import KeywordSentimentAnalyzer
+
+try:
+    import fcntl
+
+    _HAS_FCNTL = True
+except Exception:  # pragma: no cover - platform-specific
+    fcntl = None
+    _HAS_FCNTL = False
+
+_LOCK_CATALOG: dict[str, threading.Lock] = {}
+_LOCK_CATALOG_GUARD = threading.Lock()
 
 
 @dataclass
@@ -61,6 +78,24 @@ class FilingEventExtractor:
     _model: Any = field(default=None, init=False, repr=False)
     last_source: str = field(default="rules", init=False)
     last_error: str | None = field(default=None, init=False)
+
+    def _load_lock_path(self) -> str | None:
+        lock_root = self.offload_folder
+        if not lock_root:
+            return _fallback_model_lock_path(_default_runtime_lock_id(self.model_id, self.__class__.__name__))
+        return _build_model_lock_path(lock_root, _default_runtime_lock_id(self.model_id, self.__class__.__name__))
+
+    def _load_local_model(self) -> tuple[Any, Any]:
+        if self._tokenizer is not None and self._model is not None:
+            return self._tokenizer, self._model
+        lock_path = self._load_lock_path()
+        with _acquire_model_load_lock(lock_path):
+            if self._tokenizer is not None and self._model is not None:
+                return self._tokenizer, self._model
+            tokenizer, model = self._load_local_model_no_lock()
+            self._tokenizer = tokenizer
+            self._model = model
+            return self._tokenizer, self._model
 
     def extract(self, text: str) -> dict[str, object]:
         if self.use_local_model:
@@ -135,7 +170,7 @@ class FilingEventExtractor:
         generated = output_ids[0][inputs["input_ids"].shape[-1] :]
         return tokenizer.decode(generated, skip_special_tokens=True)
 
-    def _load_local_model(self) -> tuple[Any, Any]:
+    def _load_local_model_no_lock(self) -> tuple[Any, Any]:
         if self._tokenizer is None or self._model is None:
             from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -154,31 +189,225 @@ class FilingEventExtractor:
 class FinGPTEventExtractor(FilingEventExtractor):
     model_id: str = "FinGPT/fingpt-mt_llama3-8b_lora"
     base_model_id: str | None = "meta-llama/Meta-Llama-3-8B"
+    runtime: str = "transformers"
+    runtime_model_path: str | None = None
+    allow_unquantized_transformers: bool = False
+    allow_unquantized_fingpt: bool = False
 
-    def _load_local_model(self) -> tuple[Any, Any]:
-        if self._tokenizer is None or self._model is None:
+    def _load_lock_path(self) -> str | None:
+        lock_root = self.offload_folder or (
+            os.path.dirname(os.path.expanduser(self.runtime_model_path))
+            if self.runtime_model_path
+            else None
+        )
+        return _build_model_lock_path(
+            lock_root,
+            _default_runtime_lock_id(
+                self.model_id,
+                self.__class__.__name__,
+                base_model_id=self.base_model_id,
+                runtime=self._normalized_runtime(),
+                runtime_model_path=self.runtime_model_path,
+            ),
+        )
+
+    @property
+    def runtime_label(self) -> str:
+        return _normalize_fingpt_runtime(self.runtime)
+
+    def _normalized_runtime(self) -> str:
+        return self.runtime_label
+
+    def _is_default_unquantized_guarded_transformers(self) -> bool:
+        if self.allow_unquantized_transformers or self.allow_unquantized_fingpt:
+            return False
+        base = (self.base_model_id or "").lower()
+        return "meta-llama/llama-3-8b" in base or ("meta-llama" in base and "3-8b" in base)
+
+    def _load_transformer_runtime(self) -> tuple[Any, Any]:
+        if self._is_default_unquantized_guarded_transformers():
+            raise RuntimeError(
+                "Refusing to load default unquantized FinGPT Transformers runtime. "
+                "Set allow_unquantized_transformers=True or allow_unquantized_fingpt=True to enable."
+            )
+        try:
             from transformers import AutoModelForCausalLM, AutoTokenizer
-
-            tokenizer_id = self.base_model_id or self.model_id
-            kwargs = _from_pretrained_kwargs(self.local_files_only, self.trust_remote_code)
-            self._tokenizer = AutoTokenizer.from_pretrained(tokenizer_id, **kwargs)
-            _ensure_pad_token(self._tokenizer)
-            model_kwargs = _model_from_pretrained_kwargs(self.device_map, self.offload_folder, kwargs)
-            if self.base_model_id:
+        except ImportError as exc:
+            raise RuntimeError("transformers is required for FinGPT transformers runtime.") from exc
+        tokenizer_id = self.base_model_id or self.model_id
+        kwargs = _from_pretrained_kwargs(self.local_files_only, self.trust_remote_code)
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_id, **kwargs)
+        _ensure_pad_token(tokenizer)
+        model_kwargs = _model_from_pretrained_kwargs(self.device_map, self.offload_folder, kwargs)
+        if self.base_model_id:
+            try:
                 from peft import PeftModel
+            except ImportError as exc:
+                raise RuntimeError("peft is required for FinGPT transformers LoRA adapter loading.") from exc
+            base = AutoModelForCausalLM.from_pretrained(
+                self.base_model_id,
+                **model_kwargs,
+            )
+            peft_kwargs = {"local_files_only": True} if self.local_files_only else {}
+            model = PeftModel.from_pretrained(base, self.model_id, **peft_kwargs)
+        else:
+            model = AutoModelForCausalLM.from_pretrained(
+                self.model_id,
+                **model_kwargs,
+            )
+        return tokenizer, model
 
-                base = AutoModelForCausalLM.from_pretrained(
-                    self.base_model_id,
-                    **model_kwargs,
-                )
-                peft_kwargs = {"local_files_only": True} if self.local_files_only else {}
-                self._model = PeftModel.from_pretrained(base, self.model_id, **peft_kwargs)
-            else:
-                self._model = AutoModelForCausalLM.from_pretrained(
-                    self.model_id,
-                    **model_kwargs,
-                )
-        return self._tokenizer, self._model
+    def _load_mlx_runtime(self) -> tuple[Any, Any]:
+        path = self.runtime_model_path or self.model_id
+        if not path:
+            raise ValueError("runtime_model_path is required for FinGPT MLX runtime.")
+        try:
+            from mlx_lm import load
+        except ImportError as exc:
+            raise RuntimeError("mlx_lm is required for FinGPT MLX runtime.") from exc
+        loaded = load(path)
+        if not isinstance(loaded, tuple) or len(loaded) < 2:
+            raise RuntimeError(f"Unexpected MLX load response for: {path}")
+        model, tokenizer = loaded[:2]
+        if tokenizer is None or model is None:
+            raise RuntimeError(f"MLX runtime failed to load model from: {path}")
+        return tokenizer, model
+
+    def _load_llamacpp_runtime(self) -> tuple[Any, Any]:
+        path = self.runtime_model_path or self.model_id
+        if not path:
+            raise ValueError("runtime_model_path is required for FinGPT llama.cpp runtime.")
+        if not (str(path).lower().endswith(".gguf") or str(path).lower().endswith(".ggml")):
+            raise ValueError(f"LLama.cpp runtime expects a GGUF/quantized model file path; got: {path}")
+        try:
+            from llama_cpp import Llama
+        except Exception as exc:
+            raise RuntimeError("llama_cpp is required for FinGPT llama.cpp runtime.") from exc
+        return None, Llama(
+            model_path=str(path),
+            n_ctx=4096,
+            verbose=False,
+        )
+
+    def _load_local_model_no_lock(self) -> tuple[Any, Any]:
+        runtime = self._normalized_runtime()
+        if runtime == "transformers":
+            return self._load_transformer_runtime()
+        if runtime == "mlx":
+            return self._load_mlx_runtime()
+        if runtime in {"llama_cpp", "llama-cpp", "llamacpp"}:
+            return self._load_llamacpp_runtime()
+        raise ValueError(f"Unsupported FinGPT runtime: {runtime}")
+
+    def _generate_with_mlx(self, text: str) -> str:
+        tokenizer, model = self._load_local_model()
+        prompt = _event_extraction_prompt(text)
+        try:
+            from mlx_lm import generate
+        except ImportError as exc:
+            raise RuntimeError("mlx_lm is required for FinGPT MLX generation.") from exc
+        try:
+            generated = generate(model, tokenizer, prompt, max_tokens=self.max_new_tokens)
+        except TypeError:
+            generated = generate(
+                model=model,
+                tokenizer=tokenizer,
+                prompt=prompt,
+                max_tokens=self.max_new_tokens,
+            )
+        return _coerce_generation_text(generated)
+
+    def _generate_with_llamacpp(self, text: str) -> str:
+        _, model = self._load_local_model()
+        prompt = _event_extraction_prompt(text)
+        generated = model(prompt, max_tokens=self.max_new_tokens, stop=["</s>"], temperature=0.0)
+        return _coerce_generation_text(generated)
+
+    def _generate_with_local_model(self, text: str) -> str:
+        runtime = self._normalized_runtime()
+        if runtime == "transformers":
+            return super()._generate_with_local_model(text)
+        if runtime == "mlx":
+            return self._generate_with_mlx(text)
+        if runtime in {"llama_cpp", "llama-cpp", "llamacpp"}:
+            return self._generate_with_llamacpp(text)
+        raise ValueError(f"Unsupported FinGPT runtime: {runtime}")
+
+
+@contextlib.contextmanager
+def _acquire_model_load_lock(lock_path: str | None):
+    if not lock_path:
+        yield
+        return
+
+    try:
+        lock_file = Path(lock_path)
+        lock_file.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        yield
+        return
+
+    with _LOCK_CATALOG_GUARD:
+        lock = _LOCK_CATALOG.setdefault(lock_path, threading.Lock())
+    if not lock.acquire(blocking=False):
+        raise RuntimeError(
+            "Another local filing model load is in progress in this process. Falling back to rules until it completes."
+        )
+    opened = None
+    try:
+        try:
+            opened = lock_file.open("a+")
+        except OSError:
+            yield
+            return
+        if _HAS_FCNTL:
+            try:
+                fcntl.flock(opened.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                raise RuntimeError(
+                    "Another process is loading the local filing LLM; skipping to avoid duplicate loading."
+                ) from exc
+        yield
+    finally:
+        if _HAS_FCNTL and opened is not None:
+            try:
+                fcntl.flock(opened.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        if opened is not None:
+            try:
+                opened.close()
+            except OSError:
+                pass
+        lock.release()
+
+
+def _build_model_lock_path(lock_root: str | None, lock_id: str) -> str | None:
+    if not lock_root:
+        return None
+    try:
+        root = Path(lock_root).expanduser()
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    return str(root / f"{lock_id}.fingpt-load.lock")
+
+
+def _fallback_model_lock_path(lock_id: str) -> str | None:
+    return _build_model_lock_path(tempfile.gettempdir(), lock_id)
+
+
+def _default_runtime_lock_id(
+    *parts: str | None,
+    base_model_id: str | None = None,
+    runtime: str | None = None,
+    runtime_model_path: str | None = None,
+) -> str:
+    values = [str(part or "") for part in (*parts, base_model_id or "", runtime or "", runtime_model_path or "")]
+    return hashlib.md5(
+        "|".join(values).encode(),
+    ).hexdigest()[:16]
+
 
 
 def _stable_summary_ref(text: str) -> str:
@@ -204,6 +433,47 @@ def _extract_json_object(raw: str) -> str:
     if match:
         return match.group(0)
     raise ValueError("No JSON object found in model output")
+
+
+def _normalize_fingpt_runtime(raw: str | None) -> str:
+    normalized = (raw or "").strip().replace(" ", "").lower()
+    normalized = normalized.replace("_", "-")
+    if normalized in {"transformer", "transformers", "hf", "huggingface", "transformersruntime"}:
+        return "transformers"
+    if normalized in {"llamacpp", "llama-cpp", "llama_cpp", "llama.cpp", "gguf", "ggml"}:
+        return "llama_cpp"
+    if normalized in {"mlx", "mlxlm", "mlx-lm"}:
+        return "mlx"
+    return normalized
+
+
+def _coerce_generation_text(payload: Any) -> str:
+    if isinstance(payload, str):
+        return payload
+    if isinstance(payload, list) and payload:
+        for item in payload:
+            converted = _coerce_generation_text(item)
+            if converted:
+                return converted
+        return ""
+    if isinstance(payload, tuple) and payload:
+        return _coerce_generation_text(payload[0])
+    if isinstance(payload, dict):
+        for key in ("text", "response", "output", "result", "generated_text"):
+            if isinstance(payload.get(key), str):
+                return str(payload[key])
+        if isinstance(payload.get("choices"), list):
+            first = payload["choices"][0]
+            if isinstance(first, dict):
+                for key in ("text", "content", "response"):
+                    if isinstance(first.get(key), str):
+                        return str(first[key])
+                message = first.get("message")
+                if isinstance(message, dict):
+                    for key in ("content", "text"):
+                        if isinstance(message.get(key), str):
+                            return str(message[key])
+    return str(payload)
 
 
 def _from_pretrained_kwargs(local_files_only: bool, trust_remote_code: bool) -> dict[str, object]:
