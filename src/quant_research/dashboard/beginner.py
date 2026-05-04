@@ -14,6 +14,10 @@ if TYPE_CHECKING:
 
 DISCLAIMER = "연구용 리서치 화면이며 투자 권고가 아닙니다. 실거래 주문 기능은 제공하지 않습니다."
 NO_EVENT_TAGS = {"", "none", "0.0", "nan"}
+DIRECTION_REQUIRED_COLUMNS = ("expected_return", "downside_quantile")
+FORECAST_REQUIRED_COLUMNS = ("expected_return", "downside_quantile", "upside_quantile")
+RISK_REQUIRED_COLUMNS = ("predicted_volatility",)
+SEC_REQUIRED_COLUMNS = ("sec_event_confidence", "sec_event_tag", "sec_risk_flag", "sec_risk_flag_20d")
 
 
 @dataclass(frozen=True)
@@ -56,8 +60,14 @@ def build_beginner_research_dashboard(
     latest = _latest_signal_row(result, ticker)
     metrics = result.backtest.metrics
 
-    direction_badge = _direction_badge(latest, signal_config)
-    risk_badge = _risk_badge(latest, metrics, config)
+    direction_badge = _direction_badge(latest, signal_config, result.predictions, result.signals)
+    risk_badge = _risk_badge(
+        latest,
+        metrics,
+        config,
+        result.predictions,
+        result.signals,
+    )
     sec_impact_badge = _sec_impact_badge(latest, result.sec_features, ticker)
     validation_badge = _validation_badge(result.validation_summary, metrics)
     forecast_chart = _forecast_interval_chart(result.market_data, latest, ticker)
@@ -67,9 +77,14 @@ def build_beginner_research_dashboard(
         "risk": _fallback_from_badge(risk_badge),
         "sec_impact": _fallback_from_badge(sec_impact_badge),
         "validation": _fallback_from_badge(validation_badge),
-        "forecast_interval_chart": _chart_fallback(forecast_chart),
+        "forecast_interval_chart": _chart_fallback(
+            forecast_chart,
+            latest,
+            result.predictions,
+            result.signals,
+        ),
         "backtest_equity_curve": _backtest_curve_fallback(result.backtest.equity_curve),
-        "sec_events": _events_fallback(sec_events),
+        "sec_events": _events_fallback(sec_events, result.sec_features),
     }
 
     raw_signal = _latest_action(result, ticker)
@@ -152,8 +167,20 @@ def _latest_action(result: PipelineResult, ticker: str) -> str:
     return "HOLD"
 
 
-def _direction_badge(row: pd.Series | None, config: SignalEngineConfig) -> DashboardBadge:
-    if row is None or not _has_values(row, "expected_return", "downside_quantile"):
+def _direction_badge(
+    row: pd.Series | None,
+    config: SignalEngineConfig,
+    predictions: pd.DataFrame,
+    signals: pd.DataFrame,
+) -> DashboardBadge:
+    if row is None or not _has_values(row, *DIRECTION_REQUIRED_COLUMNS):
+        if _model_inactive(row, DIRECTION_REQUIRED_COLUMNS, predictions, signals):
+            return _fallback_badge(
+                "방향성",
+                "모델 비활성",
+                "방향성 예측 컬럼이 현재 비활성된 모델 출력에서 누락되었습니다.",
+                "예측 모델을 활성화하고 expected_return, downside_quantile 를 산출",
+            )
         return _fallback_badge(
             "방향성",
             "자료 부족",
@@ -174,8 +201,17 @@ def _risk_badge(
     row: pd.Series | None,
     metrics: PerformanceMetrics,
     config: PipelineConfig | None,
+    predictions: pd.DataFrame,
+    signals: pd.DataFrame,
 ) -> DashboardBadge:
-    if row is None or not _has_values(row, "predicted_volatility"):
+    if row is None or not _has_values(row, *RISK_REQUIRED_COLUMNS):
+        if _model_inactive(row, RISK_REQUIRED_COLUMNS, predictions, signals):
+            return _fallback_badge(
+                "위험도",
+                "모델 비활성",
+                "위험도 예측 모델이 비활성되어 변동성 값이 누락되었습니다.",
+                "예측 모델을 활성화하고 predicted_volatility 를 산출",
+            )
         return _fallback_badge(
             "위험도",
             "자료 부족",
@@ -197,6 +233,17 @@ def _risk_badge(
 def _sec_impact_badge(row: pd.Series | None, sec_features: pd.DataFrame, ticker: str) -> DashboardBadge:
     row = _row_with_latest_sec(row, sec_features, ticker)
     if row is None or not _has_values(row, "sec_event_confidence"):
+        if _model_inactive(
+            row,
+            SEC_REQUIRED_COLUMNS,
+            sec_features,
+        ):
+            return _fallback_badge(
+                "공시 영향",
+                "모델 비활성",
+                "SEC 이벤트 추출 모델에서 필요한 컬럼이 없어 상태를 계산할 수 없습니다.",
+                "Filing event extractor 또는 sec_event_* 컬럼이 포함된 SEC feature 파이프라인 활성화",
+            )
         return _fallback_badge(
             "공시 영향",
             "자료 부족",
@@ -388,8 +435,19 @@ def _fallback_from_badge(badge: DashboardBadge) -> dict[str, str]:
     }
 
 
-def _chart_fallback(chart: dict[str, pd.DataFrame]) -> dict[str, str]:
+def _chart_fallback(
+    chart: dict[str, pd.DataFrame],
+    row: pd.Series | None,
+    predictions: pd.DataFrame,
+    signals: pd.DataFrame,
+) -> dict[str, str]:
     if chart["history"].empty or chart["interval"].empty:
+        if _model_inactive(row, FORECAST_REQUIRED_COLUMNS, predictions, signals):
+            return {
+                "status": "모델 비활성",
+                "reason": "예측 구간을 그리려면 타임시리즈 예측 모델 결과가 필요합니다.",
+                "next_needed_data": "expected_return, downside_quantile, upside_quantile 를 함께 산출하는 예측 컬럼",
+            }
         return {
             "status": "자료 부족",
             "reason": "가격 history 또는 예측 구간 데이터가 부족합니다.",
@@ -408,8 +466,14 @@ def _backtest_curve_fallback(equity_curve: pd.DataFrame) -> dict[str, str]:
     return {"status": "정상", "reason": "", "next_needed_data": ""}
 
 
-def _events_fallback(events: list[dict[str, object]]) -> dict[str, str]:
+def _events_fallback(events: list[dict[str, object]], sec_features: pd.DataFrame) -> dict[str, str]:
     if not events:
+        if _model_inactive(None, SEC_REQUIRED_COLUMNS, sec_features):
+            return {
+                "status": "모델 비활성",
+                "reason": "SEC 이벤트 추출 모델이 비활성되어 이벤트 타임라인을 만들 수 없습니다.",
+                "next_needed_data": "sec_event_confidence, sec_event_tag, sec_risk_flag_20d 출력을 포함하는 SEC 모델",
+            }
         return {
             "status": "자료 부족",
             "reason": "표시할 SEC 이벤트 카드가 없습니다.",
@@ -420,6 +484,17 @@ def _events_fallback(events: list[dict[str, object]]) -> dict[str, str]:
 
 def _has_values(row: pd.Series, *columns: str) -> bool:
     return all(column in row.index and pd.notna(row[column]) for column in columns)
+
+
+def _model_inactive(row: pd.Series | None, required_columns: tuple[str, ...], *frames: pd.DataFrame) -> bool:
+    if row is not None and not set(required_columns).issubset(set(row.index)):
+        return True
+    for frame in frames:
+        if frame.empty:
+            continue
+        if not set(required_columns).issubset(set(frame.columns)):
+            return True
+    return False
 
 
 def _float_value(row: pd.Series, column: str, default: float = 0.0) -> float:

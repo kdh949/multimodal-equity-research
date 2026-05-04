@@ -174,7 +174,7 @@ def test_beginner_dashboard_falls_back_interval_when_forecast_inputs_missing() -
     dashboard = build_beginner_research_dashboard(result, "AAPL")
 
     assert dashboard.forecast_interval_chart["interval"].empty
-    assert dashboard.fallback_state["forecast_interval_chart"]["status"] == "자료 부족"
+    assert dashboard.fallback_state["forecast_interval_chart"]["status"] == "모델 비활성"
     assert not dashboard.fallback_state["forecast_interval_chart"]["reason"] == ""
     assert len(dashboard.forecast_interval_chart["history"]) >= 1
 
@@ -192,9 +192,13 @@ def test_beginner_backtest_equity_curve_is_renderable_or_fallback_safe() -> None
         validation_summary=pd.DataFrame({"fold": [0], "is_oos": [True], "directional_accuracy": [0.63]}),
     )
     dashboard = build_beginner_research_dashboard(result, "AAPL")
-    figure = dashboard_streamlit._build_backtest_equity_curve_figure(dashboard.backtest_result["equity_curve"])
+
+    figure = dashboard_streamlit._build_backtest_equity_curve_figure(
+        dashboard.backtest_result["equity_curve"]
+    )
     assert figure is not None
     assert len(figure.data) >= 1
+
     assert dashboard_streamlit._build_backtest_equity_curve_figure(pd.DataFrame()) is None
 
 
