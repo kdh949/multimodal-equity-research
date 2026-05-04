@@ -4,6 +4,7 @@ import pandas as pd
 
 from quant_research.backtest.engine import BacktestConfig, run_long_only_backtest
 from quant_research.dashboard import build_beginner_research_dashboard
+from quant_research.dashboard import streamlit as dashboard_streamlit
 from quant_research.pipeline import PipelineConfig, PipelineResult
 
 
@@ -42,6 +43,10 @@ def test_beginner_dashboard_builds_badges_and_keeps_raw_signal_in_details() -> N
     assert dashboard.fallback_state["forecast_interval_chart"]["status"] == "정상"
     assert dashboard.fallback_state["sec_events"]["status"] == "정상"
     assert not dashboard.fallback_state["forecast_interval_chart"]["reason"]
+    assert isinstance(dashboard.backtest_result["equity_curve"], pd.DataFrame)
+    assert "equity" in dashboard.backtest_result["equity_curve"].columns
+    assert not dashboard.backtest_result["equity_curve"].empty
+    assert dashboard.fallback_state["backtest_equity_curve"]["status"] == "정상"
     assert dashboard.research_summary["raw_signal_visible"] is False
     assert "투자 권고가 아닙니다" in dashboard.disclaimer
     assert not dashboard.forecast_interval_chart["interval"].empty
@@ -63,6 +68,7 @@ def test_beginner_dashboard_reports_fallbacks_without_hiding_sections() -> None:
     assert dashboard.fallback_state["validation"]["status"] == "검증 불가"
     assert dashboard.fallback_state["sec_events"]["status"] == "자료 부족"
     assert dashboard.fallback_state["forecast_interval_chart"]["status"] == "자료 부족"
+    assert dashboard.fallback_state["backtest_equity_curve"]["status"] == "자료 부족"
     assert dashboard.fallback_state["validation"]["next_needed_data"]
     assert dashboard.forecast_interval_chart["history"].empty
     assert dashboard.raw_signal == "HOLD"
@@ -171,6 +177,29 @@ def test_beginner_dashboard_falls_back_interval_when_forecast_inputs_missing() -
     assert dashboard.fallback_state["forecast_interval_chart"]["status"] == "자료 부족"
     assert not dashboard.fallback_state["forecast_interval_chart"]["reason"] == ""
     assert len(dashboard.forecast_interval_chart["history"]) >= 1
+
+
+def test_beginner_backtest_equity_curve_is_renderable_or_fallback_safe() -> None:
+    result = _result(
+        predictions=_prediction_frame(
+            expected_return=0.02,
+            predicted_volatility=0.015,
+            downside_quantile=-0.01,
+            sec_risk_flag=0.0,
+            sec_event_tag="earnings",
+            sec_event_confidence=0.82,
+        ),
+        validation_summary=pd.DataFrame({"fold": [0], "is_oos": [True], "directional_accuracy": [0.63]}),
+    )
+    dashboard = build_beginner_research_dashboard(result, "AAPL")
+
+    figure = dashboard_streamlit._build_backtest_equity_curve_figure(
+        dashboard.backtest_result["equity_curve"]
+    )
+    assert figure is not None
+    assert len(figure.data) >= 1
+
+    assert dashboard_streamlit._build_backtest_equity_curve_figure(pd.DataFrame()) is None
 
 
 def _result(

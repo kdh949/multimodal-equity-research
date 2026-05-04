@@ -34,11 +34,18 @@ def render_beginner_overview(dashboard: BeginnerResearchDashboard) -> None:
 
     st.subheader("Backtest Validation Snapshot")
     backtest = dashboard.backtest_result
-    metrics_cols = st.columns(4)
-    metrics_cols[0].metric("Sharpe", f"{backtest['sharpe']:.2f}")
-    metrics_cols[1].metric("Hit Rate", f"{backtest['hit_rate']:.2%}")
-    metrics_cols[2].metric("Max Drawdown", f"{backtest['max_drawdown']:.2%}")
-    metrics_cols[3].metric("Exposure", f"{backtest['exposure']:.2%}")
+    equity_chart_col, metrics_col = st.columns([1.5, 1.0])
+    with equity_chart_col:
+        st.markdown("### Backtest Equity Curve")
+        _render_backtest_equity_curve(dashboard)
+    with metrics_col:
+        st.markdown("### Validation Metrics")
+        metrics_cols = st.columns(2)
+        metrics_cols[0].metric("Sharpe", f"{backtest['sharpe']:.2f}")
+        metrics_cols[1].metric("Hit Rate", f"{backtest['hit_rate']:.2%}")
+        metrics_cols[0].metric("Max Drawdown", f"{backtest['max_drawdown']:.2%}")
+        metrics_cols[1].metric("Exposure", f"{backtest['exposure']:.2%}")
+
     with st.expander("Deterministic signal detail"):
         st.dataframe(
             pd.DataFrame(
@@ -107,6 +114,48 @@ def _render_forecast_chart(dashboard: BeginnerResearchDashboard) -> None:
     )
     figure.update_layout(height=320, margin={"l": 10, "r": 10, "t": 10, "b": 10})
     st.plotly_chart(figure, use_container_width=True)
+
+
+def _render_backtest_equity_curve(dashboard: BeginnerResearchDashboard) -> None:
+    equity_curve = dashboard.backtest_result.get("equity_curve")
+    if not isinstance(equity_curve, pd.DataFrame):
+        _render_fallback(dashboard.fallback_state["backtest_equity_curve"])
+        return
+    figure = _build_backtest_equity_curve_figure(equity_curve)
+    if figure is None:
+        _render_fallback(dashboard.fallback_state["backtest_equity_curve"])
+        return
+    st.plotly_chart(figure, use_container_width=True)
+
+
+def _build_backtest_equity_curve_figure(equity_curve: pd.DataFrame) -> go.Figure | None:
+    if equity_curve.empty or "date" not in equity_curve.columns or "equity" not in equity_curve.columns:
+        return None
+    curve = equity_curve.copy()
+    curve["date"] = pd.to_datetime(curve["date"], errors="coerce")
+    curve = curve.dropna(subset=["date", "equity"]).sort_values("date")
+    if curve.empty:
+        return None
+    figure = go.Figure()
+    figure.add_trace(
+        go.Scatter(
+            x=curve["date"],
+            y=curve["equity"],
+            mode="lines",
+            name="Portfolio Equity",
+        )
+    )
+    if "benchmark_equity" in curve.columns:
+        figure.add_trace(
+            go.Scatter(
+                x=curve["date"],
+                y=curve["benchmark_equity"],
+                mode="lines",
+                name="Benchmark Equity",
+            )
+        )
+    figure.update_layout(height=260, margin={"l": 10, "r": 10, "t": 10, "b": 10})
+    return figure
 
 
 def _render_sec_events(dashboard: BeginnerResearchDashboard) -> None:
