@@ -68,6 +68,7 @@ def build_beginner_research_dashboard(
         "sec_impact": _fallback_from_badge(sec_impact_badge),
         "validation": _fallback_from_badge(validation_badge),
         "forecast_interval_chart": _chart_fallback(forecast_chart),
+        "backtest_equity_curve": _backtest_curve_fallback(result.backtest.equity_curve),
         "sec_events": _events_fallback(sec_events),
     }
 
@@ -393,6 +394,16 @@ def _chart_fallback(chart: dict[str, pd.DataFrame]) -> dict[str, str]:
             "status": "자료 부족",
             "reason": "가격 history 또는 예측 구간 데이터가 부족합니다.",
             "next_needed_data": "최근 가격 데이터와 expected/downside/upside 예측값",
+        }
+    return {"status": "정상", "reason": "", "next_needed_data": ""}
+
+
+def _backtest_curve_fallback(equity_curve: pd.DataFrame) -> dict[str, str]:
+    if equity_curve.empty or "date" not in equity_curve.columns or "equity" not in equity_curve.columns:
+        return {
+            "status": "자료 부족",
+            "reason": "백테스트 equity 곡선이 비어 있습니다.",
+            "next_needed_data": "백테스트 결과 equity와 날짜 데이터",
         }
     return {"status": "정상", "reason": "", "next_needed_data": ""}
 
