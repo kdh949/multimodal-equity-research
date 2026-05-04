@@ -3,10 +3,9 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import multiprocessing as mp
 import os
 import re
-import subprocess
-import sys
 import tempfile
 import threading
 from dataclasses import dataclass, field
@@ -27,6 +26,32 @@ except Exception:  # pragma: no cover - platform-specific
 
 _LOCK_CATALOG: dict[str, threading.Lock] = {}
 _LOCK_CATALOG_GUARD = threading.Lock()
+
+
+def _mlx_worker_loop(model_path: str, req_queue: Any, resp_queue: Any) -> None:
+    """MLX 추론 워커 — spawn된 별도 프로세스에서 실행 (Metal 컨텍스트 격리).
+
+    fork()를 사용하지 않는 spawn 방식으로 시작되므로 PyTorch MPS 상태가 상속되지 않아
+    Metal 컨텍스트 충돌(SIGSEGV)이 발생하지 않는다.
+    """
+    try:
+        from mlx_lm import generate, load
+
+        model, tokenizer = load(model_path)
+        resp_queue.put({"status": "ready"})
+    except Exception as exc:
+        resp_queue.put({"error": str(exc)})
+        return
+
+    while True:
+        prompt = req_queue.get()
+        if prompt is None:
+            break
+        try:
+            response = generate(model, tokenizer, prompt=prompt, max_tokens=192, verbose=False)
+            resp_queue.put({"response": response})
+        except Exception as exc:
+            resp_queue.put({"error": str(exc)})
 
 
 @dataclass
@@ -207,8 +232,10 @@ class FinGPTEventExtractor(FilingEventExtractor):
     ollama_model: str = "fingpt"
     ollama_base_url: str = "http://localhost:11434"
     ollama_timeout: float = 60.0
-    # MLX 서브프로세스 (PyTorch Metal 충돌 격리용, 내부 상태)
+    # MLX spawn 프로세스 (fork 없이 Metal 컨텍스트 격리, 내부 상태)
     _mlx_proc: Any = field(default=None, init=False, repr=False, compare=False)
+    _mlx_req_queue: Any = field(default=None, init=False, repr=False, compare=False)
+    _mlx_resp_queue: Any = field(default=None, init=False, repr=False, compare=False)
 
     def _load_lock_path(self) -> str | None:
         if self.single_load_lock_path:
@@ -321,46 +348,41 @@ class FinGPTEventExtractor(FilingEventExtractor):
         path = self.runtime_model_path
         if not path:
             raise ValueError("runtime_model_path is required for FinGPT MLX runtime.")
-        worker = Path(__file__).resolve().parents[3] / "scripts" / "fingpt_mlx_worker.py"
-        if not worker.exists():
-            raise RuntimeError(f"MLX worker script not found: {worker}")
-        self._mlx_proc = subprocess.Popen(
-            [sys.executable, str(worker), str(path)],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            text=True,
-            bufsize=1,
+        # spawn 방식으로 프로세스를 시작해 fork()를 완전히 우회
+        # (fork는 macOS Metal/ObjC 상태를 상속하여 SIGSEGV 유발)
+        ctx = mp.get_context("spawn")
+        self._mlx_req_queue = ctx.Queue()
+        self._mlx_resp_queue = ctx.Queue()
+        self._mlx_proc = ctx.Process(
+            target=_mlx_worker_loop,
+            args=(str(Path(path).resolve()), self._mlx_req_queue, self._mlx_resp_queue),
+            daemon=True,
         )
-        ready_raw = self._mlx_proc.stdout.readline()
-        if not ready_raw:
-            raise RuntimeError("MLX worker exited before sending ready signal.")
-        ready = json.loads(ready_raw.strip())
+        self._mlx_proc.start()
+        ready = self._mlx_resp_queue.get(timeout=180)
         if "error" in ready:
+            self._mlx_proc.terminate()
             raise RuntimeError(f"MLX worker 시작 실패: {ready['error']}")
 
     def _generate_with_mlx(self, text: str) -> str:
-        if self._mlx_proc is None or self._mlx_proc.poll() is not None:
+        if self._mlx_proc is None or not self._mlx_proc.is_alive():
             self._start_mlx_worker()
         prompt = _event_extraction_prompt(text)
-        # 프롬프트를 한 줄로 직렬화 (개행 제거)
-        safe_prompt = prompt.replace("\n", " ").replace("\r", " ")
-        assert self._mlx_proc is not None
-        self._mlx_proc.stdin.write(safe_prompt + "\n")  # type: ignore[union-attr]
-        self._mlx_proc.stdin.flush()  # type: ignore[union-attr]
-        response_raw = self._mlx_proc.stdout.readline()  # type: ignore[union-attr]
-        if not response_raw:
-            raise RuntimeError("MLX worker closed pipe unexpectedly.")
-        response = json.loads(response_raw.strip())
+        self._mlx_req_queue.put(prompt)
+        response = self._mlx_resp_queue.get(timeout=120)
         if "error" in response:
             raise RuntimeError(f"MLX worker 추론 오류: {response['error']}")
         return response.get("response", "")
 
     def __del__(self) -> None:
-        if self._mlx_proc is not None and self._mlx_proc.poll() is None:
-            with contextlib.suppress(Exception):
-                self._mlx_proc.stdin.close()  # type: ignore[union-attr]
-            with contextlib.suppress(Exception):
-                self._mlx_proc.wait(timeout=5)
+        with contextlib.suppress(Exception):
+            if self._mlx_req_queue is not None:
+                self._mlx_req_queue.put(None)
+        with contextlib.suppress(Exception):
+            if self._mlx_proc is not None and self._mlx_proc.is_alive():
+                self._mlx_proc.join(timeout=5)
+                if self._mlx_proc.is_alive():
+                    self._mlx_proc.terminate()
 
     def _generate_with_llamacpp(self, text: str) -> str:
         _, model = self._load_local_model()
