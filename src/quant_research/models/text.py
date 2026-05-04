@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import requests
+
 from quant_research.features.text import KeywordSentimentAnalyzer
 
 try:
@@ -28,6 +30,7 @@ _LOCK_CATALOG_GUARD = threading.Lock()
 @dataclass
 class FinBERTSentimentAnalyzer:
     model_id: str = "ProsusAI/finbert"
+    device: str | None = None
     _pipeline: Any = None
     _fallback: KeywordSentimentAnalyzer = field(default_factory=KeywordSentimentAnalyzer)
 
@@ -44,7 +47,10 @@ class FinBERTSentimentAnalyzer:
             try:
                 from transformers import pipeline
 
-                self._pipeline = pipeline("text-classification", model=self.model_id, top_k=None)
+                kwargs: dict[str, object] = {"top_k": None}
+                if self.device is not None:
+                    kwargs["device"] = self.device
+                self._pipeline = pipeline("text-classification", model=self.model_id, **kwargs)
             except Exception:
                 return self._fallback.score(text)
 
@@ -196,6 +202,9 @@ class FinGPTEventExtractor(FilingEventExtractor):
     runtime_model_path: str | None = None
     allow_unquantized_transformers: bool = False
     allow_unquantized_fingpt: bool = False
+    ollama_model: str = "fingpt"
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_timeout: float = 60.0
 
     def _load_lock_path(self) -> str | None:
         if self.single_load_lock_path:
@@ -328,6 +337,16 @@ class FinGPTEventExtractor(FilingEventExtractor):
         generated = model(prompt, max_tokens=self.max_new_tokens, stop=["</s>"], temperature=0.0)
         return _coerce_generation_text(generated)
 
+    def _generate_with_ollama(self, text: str) -> str:
+        prompt = _event_extraction_prompt(text)
+        response = requests.post(
+            f"{self.ollama_base_url}/api/generate",
+            json={"model": self.ollama_model, "prompt": prompt, "stream": False},
+            timeout=self.ollama_timeout,
+        )
+        response.raise_for_status()
+        return str(response.json().get("response", "")).strip()
+
     def _generate_with_local_model(self, text: str) -> str:
         runtime = self._normalized_runtime()
         if runtime == "transformers":
@@ -336,6 +355,8 @@ class FinGPTEventExtractor(FilingEventExtractor):
             return self._generate_with_mlx(text)
         if runtime in {"llama_cpp", "llama-cpp", "llamacpp"}:
             return self._generate_with_llamacpp(text)
+        if runtime == "ollama":
+            return self._generate_with_ollama(text)
         raise ValueError(f"Unsupported FinGPT runtime: {runtime}")
 
 
@@ -458,6 +479,8 @@ def _normalize_fingpt_runtime(raw: str | None) -> str:
         return "llama_cpp"
     if normalized in {"mlx", "mlxlm", "mlx-lm"}:
         return "mlx"
+    if normalized == "ollama":
+        return "ollama"
     return normalized
 
 

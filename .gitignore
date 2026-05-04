@@ -14,6 +14,8 @@ data/raw/
 data/processed/
 artifacts/
 reports/
+models/
+catboost_info/
 
 *.parquet
 *.pkl
