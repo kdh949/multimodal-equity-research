@@ -320,7 +320,7 @@ class FinGPTEventExtractor(FilingEventExtractor):
     def _start_mlx_worker(self) -> None:
         path = self.runtime_model_path
         if not path:
-            raise ValueError("runtime_model_path is required for FinGPT MLX subprocess runtime.")
+            raise ValueError("runtime_model_path is required for FinGPT MLX runtime.")
         worker = Path(__file__).resolve().parents[3] / "scripts" / "fingpt_mlx_worker.py"
         if not worker.exists():
             raise RuntimeError(f"MLX worker script not found: {worker}")
