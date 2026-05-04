@@ -92,7 +92,7 @@ with st.sidebar:
     )
     max_drawdown_stop = st.slider("Max drawdown stop", min_value=0.05, max_value=0.50, value=0.20, step=0.05)
     enable_feature_model_ablation = st.checkbox("Run model feature ablation", value=False)
-    run = st.button("Run research", type="primary", use_container_width=True)
+    run = st.button("Run research", type="primary", width="stretch")
 
 if data_mode == "live":
     st.info(
@@ -182,31 +182,31 @@ with tabs[1]:
     )
     st.dataframe(
         latest[[col for col in signal_columns if col in latest.columns]],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
 with tabs[2]:
     st.subheader("Feature Fusion Sample")
-    st.dataframe(result.features.tail(200), use_container_width=True, hide_index=True)
+    st.dataframe(result.features.tail(200), width="stretch", hide_index=True)
 
 with tabs[3]:
     st.subheader("Walk-Forward Summary")
-    st.dataframe(result.validation_summary, use_container_width=True, hide_index=True)
+    st.dataframe(result.validation_summary, width="stretch", hide_index=True)
     if "is_oos" in result.validation_summary.columns:
         oos_summary = result.validation_summary[result.validation_summary["is_oos"]]
     else:
         oos_summary = pd.DataFrame()
     if not oos_summary.empty:
         st.subheader("Out-of-Sample Holdout")
-        st.dataframe(oos_summary, use_container_width=True, hide_index=True)
+        st.dataframe(oos_summary, width="stretch", hide_index=True)
     st.subheader("Ablation Summary")
-    st.dataframe(pd.DataFrame(result.ablation_summary), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(result.ablation_summary), width="stretch", hide_index=True)
 
 with tabs[4]:
     st.subheader("Raw Market Sample")
-    st.dataframe(result.market_data.tail(200), use_container_width=True, hide_index=True)
+    st.dataframe(result.market_data.tail(200), width="stretch", hide_index=True)
     st.subheader("News Feature Sample")
-    st.dataframe(result.news_features.tail(100), use_container_width=True, hide_index=True)
+    st.dataframe(result.news_features.tail(100), width="stretch", hide_index=True)
     st.subheader("SEC Feature Sample")
-    st.dataframe(result.sec_features.tail(100), use_container_width=True, hide_index=True)
+    st.dataframe(result.sec_features.tail(100), width="stretch", hide_index=True)

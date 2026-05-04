@@ -98,7 +98,7 @@ def _render_forecast_chart(dashboard: BeginnerResearchDashboard) -> None:
         )
     )
     figure.update_layout(height=320, margin={"l": 10, "r": 10, "t": 10, "b": 10})
-    st.plotly_chart(figure, use_container_width=True)
+    st.plotly_chart(figure, width="stretch")
 
 
 def _render_backtest_equity_curve(dashboard: BeginnerResearchDashboard) -> None:
@@ -110,7 +110,7 @@ def _render_backtest_equity_curve(dashboard: BeginnerResearchDashboard) -> None:
     if figure is None:
         _render_fallback(dashboard.fallback_state["backtest_equity_curve"])
         return
-    st.plotly_chart(figure, use_container_width=True)
+    st.plotly_chart(figure, width="stretch")
 
 
 def _build_backtest_equity_curve_figure(equity_curve: pd.DataFrame) -> go.Figure | None:
