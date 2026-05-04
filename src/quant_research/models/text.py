@@ -30,6 +30,7 @@ _LOCK_CATALOG_GUARD = threading.Lock()
 @dataclass
 class FinBERTSentimentAnalyzer:
     model_id: str = "ProsusAI/finbert"
+    device: str | None = None
     _pipeline: Any = None
     _fallback: KeywordSentimentAnalyzer = field(default_factory=KeywordSentimentAnalyzer)
 
@@ -46,7 +47,10 @@ class FinBERTSentimentAnalyzer:
             try:
                 from transformers import pipeline
 
-                self._pipeline = pipeline("text-classification", model=self.model_id, top_k=None)
+                kwargs: dict[str, object] = {"top_k": None}
+                if self.device is not None:
+                    kwargs["device"] = self.device
+                self._pipeline = pipeline("text-classification", model=self.model_id, **kwargs)
             except Exception:
                 return self._fallback.score(text)
 

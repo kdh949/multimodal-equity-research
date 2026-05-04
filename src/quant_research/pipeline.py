@@ -138,7 +138,7 @@ def run_research_pipeline(config: PipelineConfig | None = None) -> PipelineResul
     )
 
     news_items = _load_news_items(config, tickers)
-    news_features = build_news_features(news_items, _sentiment_analyzer(config.sentiment_model))
+    news_features = build_news_features(news_items, _sentiment_analyzer(config.sentiment_model, config.local_model_device_map))
 
     filings_by_ticker, facts_by_ticker = _load_sec_data(config, tickers)
     sec_features = build_sec_features(
@@ -293,9 +293,11 @@ def _attach_signal_features(predictions: pd.DataFrame, features: pd.DataFrame) -
     return enriched
 
 
-def _sentiment_analyzer(model_name: str):
+def _sentiment_analyzer(model_name: str, device_map: str = "auto"):
     if model_name.lower() == "finbert":
-        return FinBERTSentimentAnalyzer()
+        # device_map="cpu" when MLX is active to avoid PyTorch MPS + Metal conflict
+        device = "cpu" if device_map == "cpu" else None
+        return FinBERTSentimentAnalyzer(device=device)
     return KeywordSentimentAnalyzer()
 
 

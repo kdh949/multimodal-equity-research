@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import dataclasses
 import json
 import sys
@@ -21,11 +22,76 @@ SEP_WIDE = "=" * 60
 SEP_THIN = "-" * 60
 
 
-def build_config() -> PipelineConfig:
+MLX_MODEL_PATH = "artifacts/model_cache/fingpt-mt-llama3-8b-mlx"
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="백테스트 검증 스크립트 — yfinance 실제 데이터로 모델 예측력을 검증합니다.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+실행 예시:
+  uv run python scripts/run_backtest_validation.py                        # 경량 모드 (기본)
+  uv run python scripts/run_backtest_validation.py --mode full            # 실전 모드 MLX (기본)
+  uv run python scripts/run_backtest_validation.py --mode full --runtime ollama  # 실전 모드 Ollama
+        """,
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["lightweight", "full"],
+        default="lightweight",
+        help="lightweight: 빠른 검증 (기본). full: FinBERT + FinGPT 포함 실전 스택.",
+    )
+    parser.add_argument(
+        "--runtime",
+        choices=["mlx", "ollama"],
+        default="mlx",
+        help="full 모드 FinGPT 런타임. mlx: Apple Silicon MLX (기본). ollama: Ollama 서버.",
+    )
+    parser.add_argument(
+        "--years",
+        type=int,
+        default=DATE_RANGE_YEARS,
+        metavar="N",
+        help=f"분석할 과거 데이터 기간(년). 기본값: {DATE_RANGE_YEARS}",
+    )
+    parser.add_argument(
+        "--tickers",
+        nargs="+",
+        default=None,
+        metavar="TICKER",
+        help="분석할 종목 코드 목록. 기본값: DEFAULT_TICKERS (10개)",
+    )
+    return parser.parse_args()
+
+
+def build_config(args: argparse.Namespace) -> PipelineConfig:
     end = date.today()
-    start = end - timedelta(days=365 * DATE_RANGE_YEARS)
+    start = end - timedelta(days=365 * args.years)
+    tickers = args.tickers if args.tickers else TICKERS
+
+    if args.mode == "full":
+        runtime = args.runtime
+        extra: dict = {}
+        if runtime == "mlx":
+            # MLX는 Metal GPU를 점유하므로 FinBERT(PyTorch MPS)와 충돌 방지를 위해 CPU 사용
+            extra["fingpt_quantized_model_path"] = MLX_MODEL_PATH
+            extra["local_model_device_map"] = "cpu"
+        return PipelineConfig(
+            tickers=tickers,
+            data_mode="live",
+            start=start,
+            end=end,
+            sentiment_model="finbert",
+            filing_extractor_model="fingpt",
+            enable_local_filing_llm=True,
+            fingpt_runtime=runtime,
+            time_series_inference_mode="proxy",
+            **extra,
+        )
+
     return PipelineConfig(
-        tickers=TICKERS,
+        tickers=tickers,
         data_mode="live",
         start=start,
         end=end,
@@ -221,11 +287,16 @@ def print_file_summary(out_dir: Path) -> None:
 
 
 def main() -> int:
-    config = build_config()
+    args = _parse_args()
+    config = build_config(args)
 
     print()
-    print(f"yfinance에서 실제 데이터 수집 중 ({len(config.tickers)}개 종목, {config.start} ~ {config.end})...")
-    print("경량 모드 사용 중 (대형 모델 다운로드 없음)")
+    if args.mode == "full":
+        runtime_label = f"MLX (Apple Silicon)" if args.runtime == "mlx" else "Ollama"
+        print(f"[ 실전 모드 ] FinBERT(감성 분석) + FinGPT(공시 이벤트 추출) 활성화  |  런타임: {runtime_label}")
+    else:
+        print("[ 경량 모드 ] 키워드 감성 + 규칙 기반 공시 (대형 모델 다운로드 없음)")
+    print(f"             {len(config.tickers)}개 종목, {config.start} ~ {config.end} ({args.years}년)")
     print()
 
     result = run_research_pipeline(config)
