@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from inspect import Parameter, signature
+import sys
 
 import pandas as pd
 
@@ -41,6 +43,20 @@ CIK_BY_TICKER = {
 }
 
 
+def _is_macos() -> bool:
+    return sys.platform == "darwin"
+
+
+def _default_fingpt_runtime() -> str:
+    return "mlx" if _is_macos() else "transformers"
+
+
+def _default_fingpt_quantized_model_path() -> str:
+    if _is_macos():
+        return "artifacts/model_cache/fingpt-mt-llama3-8b-mlx"
+    return "artifacts/model_cache/fingpt-mt-llama3-8b-lora-q4_0.gguf"
+
+
 @dataclass(frozen=True)
 class PipelineConfig:
     tickers: list[str] = field(default_factory=lambda: list(DEFAULT_TICKERS))
@@ -70,6 +86,10 @@ class PipelineConfig:
     finma_model_id: str = "ChanceFocus/finma-7b-nlp"
     fingpt_model_id: str = "FinGPT/fingpt-mt_llama3-8b_lora"
     fingpt_base_model_id: str | None = "meta-llama/Meta-Llama-3-8B"
+    fingpt_runtime: str = field(default_factory=_default_fingpt_runtime)
+    fingpt_quantized_model_path: str = field(default_factory=_default_fingpt_quantized_model_path)
+    fingpt_allow_unquantized_transformers: bool = False
+    fingpt_single_load_lock_path: str | None = "artifacts/model_locks/fingpt-local-load.lock"
     max_symbol_weight: float = 0.35
     portfolio_volatility_limit: float = 0.04
     max_drawdown_stop: float = 0.20
@@ -289,12 +309,36 @@ def _filing_extractor(config: PipelineConfig):
             offload_folder=config.local_model_offload_folder,
         )
     if model_name == "fingpt":
+        # Keep compatibility with both the current and planned FinGPT extractor constructor
+        # fields by only passing arguments that are accepted.
+        runtime_args = {
+            "runtime": config.fingpt_runtime,
+            "runtime_model_path": config.fingpt_quantized_model_path,
+            "quantized_model_path": config.fingpt_quantized_model_path,
+            "allow_unquantized_transformers": config.fingpt_allow_unquantized_transformers,
+            "allow_unquantized_fingpt": config.fingpt_allow_unquantized_transformers,
+            "single_load_lock_path": config.fingpt_single_load_lock_path,
+        }
+        init_signature = signature(FinGPTEventExtractor)
+        signature_allows_var_kwargs = any(
+            param.kind == Parameter.VAR_KEYWORD for param in init_signature.parameters.values()
+        )
+        if signature_allows_var_kwargs:
+            runtime_kwargs = runtime_args
+        else:
+            accepted_keys = set(init_signature.parameters.keys())
+            runtime_kwargs = {
+                key: value
+                for key, value in runtime_args.items()
+                if key in accepted_keys
+            }
         return FinGPTEventExtractor(
             model_id=config.fingpt_model_id,
             use_local_model=config.enable_local_filing_llm,
             device_map=config.local_model_device_map,
             base_model_id=config.fingpt_base_model_id,
             offload_folder=config.local_model_offload_folder,
+            **runtime_kwargs,
         )
     return FilingEventExtractor(use_local_model=False)
 
