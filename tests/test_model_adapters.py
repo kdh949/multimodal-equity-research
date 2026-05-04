@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import types
+from contextlib import contextmanager
 
 import numpy as np
 import pandas as pd
@@ -282,6 +283,50 @@ def test_fingpt_local_generation_falls_back_to_rules_on_bad_json(monkeypatch) ->
     assert result["risk_flag"] is True
     assert extractor.last_source == "rules"
     assert "ValueError" in str(extractor.last_error)
+
+
+def test_fingpt_mlx_requires_runtime_path_or_repo_id(monkeypatch) -> None:
+    extractor = FinGPTEventExtractor(
+        use_local_model=True,
+        runtime="mlx",
+        runtime_model_path=None,
+        model_id="",
+    )
+    result = extractor.extract("Form 8-K material update")
+
+    assert result["event_tag"] != "none"
+    assert extractor.last_source == "rules"
+    assert "runtime_model_path is required for FinGPT MLX runtime" in str(extractor.last_error)
+
+
+def test_fingpt_llama_cpp_path_validation(monkeypatch) -> None:
+    extractor = FinGPTEventExtractor(
+        use_local_model=True,
+        runtime="llama.cpp",
+        runtime_model_path="not-a-quantized-model.bin",
+    )
+    result = extractor.extract("Material risk disclosure in the filing.")
+
+    assert extractor.last_source == "rules"
+    assert "GGUF/quantized model file path" in str(extractor.last_error)
+    assert isinstance(result["event_tag"], str)
+
+
+def test_fingpt_single_load_lock_fails_fast_without_duplicate_load(monkeypatch) -> None:
+    @contextmanager
+    def locked_context(_: str | None):
+        raise RuntimeError("another process is loading the local filing LLM")
+        yield
+
+    extractor = FinGPTEventExtractor(use_local_model=True, allow_unquantized_transformers=True)
+    monkeypatch.setattr("quant_research.models.text._acquire_model_load_lock", locked_context)
+    monkeypatch.setattr(extractor, "_load_transformer_runtime", lambda: ("tokenizer", "model"))
+
+    result = extractor.extract("Guidance risk guidance guidance")
+
+    assert extractor.last_source == "rules"
+    assert "another process is loading" in str(extractor.last_error)
+    assert result["risk_flag"] is True
 
 
 def test_ollama_agent_falls_back_when_server_unreachable(monkeypatch) -> None:
