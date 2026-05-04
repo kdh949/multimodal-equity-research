@@ -45,20 +45,6 @@ def render_beginner_overview(dashboard: BeginnerResearchDashboard) -> None:
         metrics_cols[1].metric("Hit Rate", f"{backtest['hit_rate']:.2%}")
         metrics_cols[0].metric("Max Drawdown", f"{backtest['max_drawdown']:.2%}")
         metrics_cols[1].metric("Exposure", f"{backtest['exposure']:.2%}")
-    with st.expander("Deterministic signal detail"):
-        st.dataframe(
-            pd.DataFrame(
-                [
-                    {
-                        "ticker": dashboard.ticker,
-                        "raw_signal": dashboard.raw_signal,
-                        "signal_source": "DeterministicSignalEngine",
-                    }
-                ]
-            ),
-            hide_index=True,
-            use_container_width=True,
-        )
 
 
 def _render_badge(badge: DashboardBadge) -> None:
