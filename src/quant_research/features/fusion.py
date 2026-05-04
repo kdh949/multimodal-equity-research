@@ -26,8 +26,26 @@ def fuse_features(
         "assets_",
     )
     for column in fused.columns:
-        if column.startswith(fill_zero_prefixes) and column != "news_top_event":
+        if (
+            column.startswith(fill_zero_prefixes)
+            and column != "news_top_event"
+            and pd.api.types.is_numeric_dtype(fused[column])
+        ):
             fused[column] = fused[column].fillna(0.0)
     if "news_top_event" in fused:
         fused["news_top_event"] = fused["news_top_event"].fillna("none")
+    for column in ["sec_event_tag", "sec_summary_ref"]:
+        if column in fused:
+            if column == "sec_event_tag":
+                fused[column] = fused[column].fillna("none").astype(str)
+            else:
+                fused[column] = fused[column].fillna("").astype(str)
+
+    for column in ["sec_event_tag", "news_top_event"]:
+        if column in fused:
+            fused[column] = fused[column].where(
+                ~fused[column].str.lower().isin(["nan", "none", "none "]),
+                other="none",
+            )
+
     return fused

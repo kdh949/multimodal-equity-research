@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from inspect import Parameter, signature
 
 import pandas as pd
 
@@ -41,6 +43,20 @@ CIK_BY_TICKER = {
 }
 
 
+def _is_macos() -> bool:
+    return sys.platform == "darwin"
+
+
+def _default_fingpt_runtime() -> str:
+    return "mlx" if _is_macos() else "llama-cpp"
+
+
+def _default_fingpt_quantized_model_path() -> str:
+    if _is_macos():
+        return "artifacts/model_cache/fingpt-mt-llama3-8b-mlx"
+    return "artifacts/model_cache/fingpt-mt-llama3-8b-lora-q4_0.gguf"
+
+
 @dataclass(frozen=True)
 class PipelineConfig:
     tickers: list[str] = field(default_factory=lambda: list(DEFAULT_TICKERS))
@@ -68,8 +84,12 @@ class PipelineConfig:
     filing_extractor_model: str = "rules"
     enable_local_filing_llm: bool = False
     finma_model_id: str = "ChanceFocus/finma-7b-nlp"
-    fingpt_model_id: str = "FinGPT/fingpt-mt_llama2-7b_lora"
-    fingpt_base_model_id: str | None = "meta-llama/Llama-2-7b-hf"
+    fingpt_model_id: str = "FinGPT/fingpt-mt_llama3-8b_lora"
+    fingpt_base_model_id: str | None = "meta-llama/Meta-Llama-3-8B"
+    fingpt_runtime: str = field(default_factory=_default_fingpt_runtime)
+    fingpt_quantized_model_path: str = field(default_factory=_default_fingpt_quantized_model_path)
+    fingpt_allow_unquantized_transformers: bool = False
+    fingpt_single_load_lock_path: str | None = "artifacts/model_locks/fingpt-local-load.lock"
     max_symbol_weight: float = 0.35
     portfolio_volatility_limit: float = 0.04
     max_drawdown_stop: float = 0.20
@@ -231,30 +251,45 @@ def _load_sec_frame_assets(client: SecEdgarClient, config: PipelineConfig) -> di
 def _attach_signal_features(predictions: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
     if predictions.empty:
         return predictions
-    signal_columns = [
-        "date",
-        "ticker",
-        "forward_return_1",
-        "text_risk_score",
-        "sec_risk_flag",
-        "sec_risk_flag_20d",
-        "liquidity_score",
-        "news_sentiment_mean",
-        "news_negative_ratio",
-        "sec_event_confidence",
-        "revenue_growth",
-        "net_income_growth",
-        "assets_growth",
-    ]
-    available = [column for column in signal_columns if column in features.columns]
-    enriched = predictions.drop(columns=["forward_return_1"], errors="ignore").merge(
-        features[available],
-        on=["date", "ticker"],
-        how="left",
-    )
-    for column in ["text_risk_score", "sec_risk_flag", "liquidity_score"]:
-        if column not in enriched:
-            enriched[column] = 0.0
+    if features.empty or not {"date", "ticker"}.issubset(features.columns):
+        enriched = predictions.copy()
+    else:
+        merge_columns = [column for column in features.columns if column != "forward_return_1"]
+        enriched = predictions.merge(
+            features[merge_columns],
+            on=["date", "ticker"],
+            how="left",
+        )
+
+    defaults_numeric = {
+        "text_risk_score": 0.0,
+        "sec_risk_flag": 0.0,
+        "sec_risk_flag_20d": 0.0,
+        "news_negative_ratio": 0.0,
+        "liquidity_score": 0.0,
+        "sec_event_confidence": 0.0,
+    }
+    for column, default_value in defaults_numeric.items():
+        if column in enriched:
+            enriched[column] = pd.to_numeric(enriched[column], errors="coerce").fillna(default_value)
+        else:
+            enriched[column] = default_value
+
+    defaults_text = {
+        "news_top_event": "none",
+        "sec_event_tag": "none",
+        "sec_summary_ref": "",
+    }
+    for column, default_value in defaults_text.items():
+        if column in enriched:
+            merged_series = enriched[column].fillna(default_value).astype(str)
+            merged_series = merged_series.where(~merged_series.isin({"nan", "None"}), default_value)
+            if default_value == "none":
+                merged_series = merged_series.where(merged_series.str.len() > 0, default_value)
+            enriched[column] = merged_series
+        else:
+            enriched[column] = default_value
+
     return enriched
 
 
@@ -274,12 +309,36 @@ def _filing_extractor(config: PipelineConfig):
             offload_folder=config.local_model_offload_folder,
         )
     if model_name == "fingpt":
+        # Keep compatibility with both the current and planned FinGPT extractor constructor
+        # fields by only passing arguments that are accepted.
+        runtime_args = {
+            "runtime": config.fingpt_runtime,
+            "runtime_model_path": config.fingpt_quantized_model_path,
+            "quantized_model_path": config.fingpt_quantized_model_path,
+            "allow_unquantized_transformers": config.fingpt_allow_unquantized_transformers,
+            "allow_unquantized_fingpt": config.fingpt_allow_unquantized_transformers,
+            "single_load_lock_path": config.fingpt_single_load_lock_path,
+        }
+        init_signature = signature(FinGPTEventExtractor)
+        signature_allows_var_kwargs = any(
+            param.kind == Parameter.VAR_KEYWORD for param in init_signature.parameters.values()
+        )
+        if signature_allows_var_kwargs:
+            runtime_kwargs = runtime_args
+        else:
+            accepted_keys = set(init_signature.parameters.keys())
+            runtime_kwargs = {
+                key: value
+                for key, value in runtime_args.items()
+                if key in accepted_keys
+            }
         return FinGPTEventExtractor(
             model_id=config.fingpt_model_id,
             use_local_model=config.enable_local_filing_llm,
             device_map=config.local_model_device_map,
             base_model_id=config.fingpt_base_model_id,
             offload_folder=config.local_model_offload_folder,
+            **runtime_kwargs,
         )
     return FilingEventExtractor(use_local_model=False)
 
