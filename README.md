@@ -58,6 +58,7 @@ uv --cache-dir .uv-cache sync --all-extras
 uv --cache-dir .uv-cache run python scripts/preload_local_models.py --chronos --granite
 uv --cache-dir .uv-cache run python scripts/preload_local_models.py --finma --mode download
 uv --cache-dir .uv-cache run python scripts/preload_local_models.py --fingpt --mode download --fingpt-profile mt-llama3
+uv --cache-dir .uv-cache run python scripts/preload_local_models.py --fingpt --mode verify --fingpt-profile mt-llama3 --fingpt-runtime transformers
 uv --cache-dir .uv-cache run python scripts/preload_local_models.py --fingpt --mode download --fingpt-profile forecaster --fingpt-adapter-only
 ```
 
@@ -67,7 +68,7 @@ FinGPT는 공식 repo의 base model + LoRA adapter 구조를 따른다. `mt-llam
 `FinGPT base model`은 접근 권한과 `HF_TOKEN` 또는 Hugging Face 로그인 상태가 필요할 수 있다.
 
 `Local model settings`에는 런타임 전용 경로가 추가되며, mac 기준 기본 런타임은 MLX/llama.cpp 계열 양자화 경로(`artifacts/model_cache/...q4...`)를 선호한다.
-무거운 warmup/추론은 선택적 동작이며, 기본 `Allow unquantized Transformers 8B load`는 꺼져 있어서 기본 보안 가드를 유지한다.
+`verify`는 로컬 캐시만 확인하고 모델 가중치를 메모리에 올리지 않는다. 무거운 warmup/추론은 선택적 동작이며, 기본 `Allow unquantized Transformers 8B load`는 꺼져 있어서 기본 보안 가드를 유지한다.
 단일 장비에서 로컬 모델을 동시에 여러 번 적재하지 않도록 `FinGPT single-load lock file`이 기본으로 준비되어 있다.
 7B 계열 모델이 메모리 부족으로 disk offload를 사용할 때는 `--offload-folder artifacts/model_offload`와 `--max-new-tokens`로 warmup 비용을 조절한다.
 

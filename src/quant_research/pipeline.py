@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from inspect import Parameter, signature
-import sys
 
 import pandas as pd
 
@@ -48,7 +48,7 @@ def _is_macos() -> bool:
 
 
 def _default_fingpt_runtime() -> str:
-    return "mlx" if _is_macos() else "transformers"
+    return "mlx" if _is_macos() else "llama-cpp"
 
 
 def _default_fingpt_quantized_model_path() -> str:

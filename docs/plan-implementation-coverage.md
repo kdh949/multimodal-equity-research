@@ -76,6 +76,6 @@ Legend: **Implemented / Partial / Remaining**
 
 ## Remaining priority (to fully match PLAN)
 
-1. 로컬 모델 다운로드 환경에서 `scripts/preload_local_models.py --mode warmup`을 실행해 실제 Chronos-2 / Granite TTM / FinMA / FinGPT 런타임을 검증.
+1. 로컬 모델 다운로드 환경에서 FinGPT는 먼저 `scripts/preload_local_models.py --mode verify`로 캐시만 확인하고, 실제 warmup은 quantized MLX/llama.cpp 경로와 단일 로드 락을 설정한 뒤 한 번에 하나만 실행.
 2. 텍스트·SEC feature 타이밍(특히 이벤트 발생-적용 lag)과 공개 시점 기준 반영을 더 엄격하게 문서-코드 동기화.
 3. 실제 모델 추론 기반 비교/개선 분석(Chronos-2/Granite TTM/기본 모델, OOS score stability)을 리포트 형태로 정규화.

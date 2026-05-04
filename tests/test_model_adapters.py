@@ -329,6 +329,27 @@ def test_fingpt_single_load_lock_fails_fast_without_duplicate_load(monkeypatch) 
     assert result["risk_flag"] is True
 
 
+def test_fingpt_explicit_single_load_lock_path_is_used(monkeypatch, tmp_path) -> None:
+    seen: dict[str, str | None] = {}
+
+    @contextmanager
+    def capture_lock_path(lock_path: str | None):
+        seen["path"] = lock_path
+        yield
+
+    lock_path = tmp_path / "locks" / "fingpt.lock"
+    extractor = FinGPTEventExtractor(
+        use_local_model=True,
+        allow_unquantized_transformers=True,
+        single_load_lock_path=str(lock_path),
+    )
+    monkeypatch.setattr("quant_research.models.text._acquire_model_load_lock", capture_lock_path)
+    monkeypatch.setattr(extractor, "_load_transformer_runtime", lambda: ("tokenizer", "model"))
+
+    assert extractor._load_local_model() == ("tokenizer", "model")
+    assert seen["path"] == str(lock_path)
+
+
 def test_ollama_agent_falls_back_when_server_unreachable(monkeypatch) -> None:
     def failing_request(*args, **kwargs):
         raise requests.RequestException("server unreachable")

@@ -301,6 +301,14 @@ def _warmup_selected(args: argparse.Namespace, selected: dict[str, bool]) -> Non
             local_files_only=args.local_files_only,
             offload_folder=str(args.offload_folder),
             max_new_tokens=args.max_new_tokens,
+            runtime=args.fingpt_runtime,
+            runtime_model_path=(
+                str(args.fingpt_quantized_model_path)
+                if args.fingpt_quantized_model_path is not None
+                else None
+            ),
+            allow_unquantized_transformers=args.allow_unquantized_fingpt_transformers,
+            allow_unquantized_fingpt=args.allow_unquantized_fingpt_transformers,
         )
         output = extractor.extract("Form 8-K material earnings guidance update with potential legal risk.")
         print(f"FinGPT: {output}")

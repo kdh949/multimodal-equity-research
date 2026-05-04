@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import importlib
 import sys
 from pathlib import Path
 
-import scripts.preload_local_models as preload
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+preload = importlib.import_module("scripts.preload_local_models")
 
 
 def test_fingpt_runtime_flag_accepts_llama_cpp_alias(monkeypatch: object) -> None:
@@ -84,3 +88,51 @@ def test_verify_mode_requires_quantized_model_path_for_quantized_runtime(monkeyp
 
     assert return_code == 2
     assert "Quantized runtime requested but --fingpt-quantized-model-path is missing" in output
+
+
+def test_fingpt_quantized_warmup_passes_runtime_settings(monkeypatch: object, tmp_path: Path) -> None:
+    quantized_model = tmp_path / "fingpt-cpu-int4.gguf"
+    quantized_model.write_text("quantized-model-placeholder")
+    captured: dict[str, object] = {}
+
+    class FakeFinGPTExtractor:
+        last_source = "local"
+        last_error = None
+
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+        def extract(self, text: str) -> dict[str, object]:
+            return {
+                "event_tag": "guidance",
+                "risk_flag": True,
+                "confidence": 0.8,
+                "summary_ref": text,
+            }
+
+    import quant_research.models.text as text_models
+
+    monkeypatch.setattr(text_models, "FinGPTEventExtractor", FakeFinGPTExtractor)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "prog",
+            "--mode",
+            "warmup",
+            "--fingpt",
+            "--fingpt-runtime",
+            "llama-cpp",
+            "--fingpt-quantized-model-path",
+            str(quantized_model),
+            "--offload-folder",
+            str(tmp_path / "offload"),
+        ],
+    )
+
+    return_code = preload.main()
+
+    assert return_code == 0
+    assert captured["runtime"] == "llama-cpp"
+    assert captured["runtime_model_path"] == str(quantized_model)
+    assert captured["allow_unquantized_transformers"] is False

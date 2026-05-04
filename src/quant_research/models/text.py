@@ -73,6 +73,7 @@ class FilingEventExtractor:
     local_files_only: bool = False
     trust_remote_code: bool = False
     offload_folder: str | None = None
+    single_load_lock_path: str | None = None
     max_new_tokens: int = 192
     _tokenizer: Any = field(default=None, init=False, repr=False)
     _model: Any = field(default=None, init=False, repr=False)
@@ -80,6 +81,8 @@ class FilingEventExtractor:
     last_error: str | None = field(default=None, init=False)
 
     def _load_lock_path(self) -> str | None:
+        if self.single_load_lock_path:
+            return _explicit_model_lock_path(self.single_load_lock_path)
         lock_root = self.offload_folder
         if not lock_root:
             return _fallback_model_lock_path(_default_runtime_lock_id(self.model_id, self.__class__.__name__))
@@ -195,6 +198,8 @@ class FinGPTEventExtractor(FilingEventExtractor):
     allow_unquantized_fingpt: bool = False
 
     def _load_lock_path(self) -> str | None:
+        if self.single_load_lock_path:
+            return _explicit_model_lock_path(self.single_load_lock_path)
         lock_root = self.offload_folder or (
             os.path.dirname(os.path.expanduser(self.runtime_model_path))
             if self.runtime_model_path
@@ -258,7 +263,7 @@ class FinGPTEventExtractor(FilingEventExtractor):
         return tokenizer, model
 
     def _load_mlx_runtime(self) -> tuple[Any, Any]:
-        path = self.runtime_model_path or self.model_id
+        path = self.runtime_model_path
         if not path:
             raise ValueError("runtime_model_path is required for FinGPT MLX runtime.")
         try:
@@ -274,7 +279,7 @@ class FinGPTEventExtractor(FilingEventExtractor):
         return tokenizer, model
 
     def _load_llamacpp_runtime(self) -> tuple[Any, Any]:
-        path = self.runtime_model_path or self.model_id
+        path = self.runtime_model_path
         if not path:
             raise ValueError("runtime_model_path is required for FinGPT llama.cpp runtime.")
         if not (str(path).lower().endswith(".gguf") or str(path).lower().endswith(".ggml")):
@@ -391,6 +396,15 @@ def _build_model_lock_path(lock_root: str | None, lock_id: str) -> str | None:
     except OSError:
         return None
     return str(root / f"{lock_id}.fingpt-load.lock")
+
+
+def _explicit_model_lock_path(lock_path: str) -> str | None:
+    try:
+        path = Path(lock_path).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    return str(path)
 
 
 def _fallback_model_lock_path(lock_id: str) -> str | None:
