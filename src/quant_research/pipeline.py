@@ -68,8 +68,8 @@ class PipelineConfig:
     filing_extractor_model: str = "rules"
     enable_local_filing_llm: bool = False
     finma_model_id: str = "ChanceFocus/finma-7b-nlp"
-    fingpt_model_id: str = "FinGPT/fingpt-mt_llama2-7b_lora"
-    fingpt_base_model_id: str | None = "meta-llama/Llama-2-7b-hf"
+    fingpt_model_id: str = "FinGPT/fingpt-mt_llama3-8b_lora"
+    fingpt_base_model_id: str | None = "meta-llama/Meta-Llama-3-8B"
     max_symbol_weight: float = 0.35
     portfolio_volatility_limit: float = 0.04
     max_drawdown_stop: float = 0.20
@@ -231,30 +231,45 @@ def _load_sec_frame_assets(client: SecEdgarClient, config: PipelineConfig) -> di
 def _attach_signal_features(predictions: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
     if predictions.empty:
         return predictions
-    signal_columns = [
-        "date",
-        "ticker",
-        "forward_return_1",
-        "text_risk_score",
-        "sec_risk_flag",
-        "sec_risk_flag_20d",
-        "liquidity_score",
-        "news_sentiment_mean",
-        "news_negative_ratio",
-        "sec_event_confidence",
-        "revenue_growth",
-        "net_income_growth",
-        "assets_growth",
-    ]
-    available = [column for column in signal_columns if column in features.columns]
-    enriched = predictions.drop(columns=["forward_return_1"], errors="ignore").merge(
-        features[available],
-        on=["date", "ticker"],
-        how="left",
-    )
-    for column in ["text_risk_score", "sec_risk_flag", "liquidity_score"]:
-        if column not in enriched:
-            enriched[column] = 0.0
+    if features.empty or not {"date", "ticker"}.issubset(features.columns):
+        enriched = predictions.copy()
+    else:
+        merge_columns = [column for column in features.columns if column != "forward_return_1"]
+        enriched = predictions.merge(
+            features[merge_columns],
+            on=["date", "ticker"],
+            how="left",
+        )
+
+    defaults_numeric = {
+        "text_risk_score": 0.0,
+        "sec_risk_flag": 0.0,
+        "sec_risk_flag_20d": 0.0,
+        "news_negative_ratio": 0.0,
+        "liquidity_score": 0.0,
+        "sec_event_confidence": 0.0,
+    }
+    for column, default_value in defaults_numeric.items():
+        if column in enriched:
+            enriched[column] = pd.to_numeric(enriched[column], errors="coerce").fillna(default_value)
+        else:
+            enriched[column] = default_value
+
+    defaults_text = {
+        "news_top_event": "none",
+        "sec_event_tag": "none",
+        "sec_summary_ref": "",
+    }
+    for column, default_value in defaults_text.items():
+        if column in enriched:
+            merged_series = enriched[column].fillna(default_value).astype(str)
+            merged_series = merged_series.where(~merged_series.isin({"nan", "None"}), default_value)
+            if default_value == "none":
+                merged_series = merged_series.where(merged_series.str.len() > 0, default_value)
+            enriched[column] = merged_series
+        else:
+            enriched[column] = default_value
+
     return enriched
 
 

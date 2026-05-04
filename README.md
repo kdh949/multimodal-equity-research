@@ -56,11 +56,11 @@ uv --cache-dir .uv-cache run pytest
 uv --cache-dir .uv-cache sync --all-extras
 uv --cache-dir .uv-cache run python scripts/preload_local_models.py --chronos --granite
 uv --cache-dir .uv-cache run python scripts/preload_local_models.py --finma --mode download
-uv --cache-dir .uv-cache run python scripts/preload_local_models.py --fingpt --mode download --fingpt-profile mt-llama2
+uv --cache-dir .uv-cache run python scripts/preload_local_models.py --fingpt --mode download --fingpt-profile mt-llama3
 uv --cache-dir .uv-cache run python scripts/preload_local_models.py --fingpt --mode download --fingpt-profile forecaster --fingpt-adapter-only
 ```
 
-Streamlit 사이드바에서 `Time-series inference=local`, `Filing extractor=finma|fingpt`, `Use local filing LLM`을 켜면 실제 로컬 어댑터를 호출한다. FinGPT는 공식 repo의 Llama-2 base model + LoRA adapter 구조를 따른다. `mt-llama2` 기본 profile은 `FinGPT/fingpt-mt_llama2-7b_lora`와 `meta-llama/Llama-2-7b-hf`를 사용하고, Forecaster profile은 `FinGPT/fingpt-forecaster_dow30_llama2-7b_lora`와 `meta-llama/Llama-2-7b-chat-hf`를 사용한다. Meta Llama base model은 접근 권한과 `HF_TOKEN` 또는 Hugging Face 로그인 상태가 필요할 수 있다.
+Streamlit 사이드바에서 `Time-series inference=local`, `Filing extractor=finma|fingpt`, `Use local filing LLM`을 켜면 실제 로컬 어댑터를 호출한다. FinGPT는 공식 repo의 base model + LoRA adapter 구조를 따른다. `mt-llama3` 기본 profile은 `FinGPT/fingpt-mt_llama3-8b_lora`와 `meta-llama/Meta-Llama-3-8B`를 사용하고, 이전 `mt-llama2` profile도 명시적으로 선택할 수 있다. Forecaster profile은 `FinGPT/fingpt-forecaster_dow30_llama2-7b_lora`와 `meta-llama/Llama-2-7b-chat-hf`를 사용한다. Meta Llama base model은 접근 권한과 `HF_TOKEN` 또는 Hugging Face 로그인 상태가 필요할 수 있다.
 7B 계열 모델이 메모리 부족으로 disk offload를 사용할 때는 `--offload-folder artifacts/model_offload`와 `--max-new-tokens`로 warmup 비용을 조절한다.
 
 ## 기본 종목군

@@ -10,6 +10,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 FINGPT_PROFILES = {
+    "mt-llama3": {
+        "adapter": "FinGPT/fingpt-mt_llama3-8b_lora",
+        "base": "meta-llama/Meta-Llama-3-8B",
+        "description": "Official FinGPT multi-task Llama-3 8B LoRA profile.",
+    },
     "mt-llama2": {
         "adapter": "FinGPT/fingpt-mt_llama2-7b_lora",
         "base": "meta-llama/Llama-2-7b-hf",
@@ -64,7 +69,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--granite-id", default="ibm-granite/granite-timeseries-ttm-r2")
     parser.add_argument("--granite-revision", default=None)
     parser.add_argument("--finma-id", default="ChanceFocus/finma-7b-nlp")
-    parser.add_argument("--fingpt-profile", choices=sorted(FINGPT_PROFILES), default="mt-llama2")
+    parser.add_argument("--fingpt-profile", choices=sorted(FINGPT_PROFILES), default="mt-llama3")
     parser.add_argument("--fingpt-id", default=None, help="Override the selected FinGPT LoRA adapter.")
     parser.add_argument("--fingpt-base-id", default=None, help="Override the selected FinGPT base model.")
     parser.add_argument(
