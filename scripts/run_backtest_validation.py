@@ -1,19 +1,25 @@
 from __future__ import annotations
 
+# ruff: noqa: E402, I001
+
 import argparse
 import dataclasses
 import json
+import os
 import sys
 from datetime import date, timedelta
 from pathlib import Path
+
+# macOS: PyTorch MPS 초기화 후 subprocess.Popen(fork)시 ObjC runtime 충돌 방지
+os.environ.setdefault("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES")
 
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from quant_research.config import DEFAULT_TICKERS
-from quant_research.pipeline import PipelineConfig, PipelineResult, run_research_pipeline
+from quant_research.config import DEFAULT_TICKERS  # noqa: E402
+from quant_research.pipeline import PipelineConfig, PipelineResult, run_research_pipeline  # noqa: E402
 
 TICKERS = list(DEFAULT_TICKERS)
 DATE_RANGE_YEARS = 2
@@ -114,13 +120,13 @@ def print_header(config: PipelineConfig, result: PipelineResult) -> None:
     print("  백테스트 검증 리포트 (Backtest Validation Report)")
     print(SEP_WIDE)
     print(f"  실행 날짜   : {date.today()}")
-    print(f"  데이터 소스 : yfinance (실제 인터넷 데이터)")
+    print("  데이터 소스 : yfinance (실제 인터넷 데이터)")
     print(f"  분석 기간   : {config.start} → {config.end}")
     print(f"  종목        : {tickers_str}")
     print(f"  시장 데이터 : {market_rows:,}행")
     print(f"  예측 모델   : {config.model_name}  |  훈련: {config.train_periods}일  |  테스트: {config.test_periods}일")
     print(f"  감성 모델   : {config.sentiment_model}  |  공시: {config.filing_extractor_model}  |  시계열: {config.time_series_inference_mode}")
-    print(f"  (SPY/QQQ는 SEC 데이터 없음 - CIK 미등록 ETF)")
+    print("  (SPY/QQQ는 SEC 데이터 없음 - CIK 미등록 ETF)")
     print()
 
 
@@ -292,7 +298,7 @@ def main() -> int:
 
     print()
     if args.mode == "full":
-        runtime_label = f"MLX (Apple Silicon)" if args.runtime == "mlx" else "Ollama"
+        runtime_label = "MLX (Apple Silicon)" if args.runtime == "mlx" else "Ollama"
         print(f"[ 실전 모드 ] FinBERT(감성 분석) + FinGPT(공시 이벤트 추출) 활성화  |  런타임: {runtime_label}")
     else:
         print("[ 경량 모드 ] 키워드 감성 + 규칙 기반 공시 (대형 모델 다운로드 없음)")

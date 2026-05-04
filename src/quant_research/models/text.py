@@ -5,6 +5,8 @@ import hashlib
 import json
 import os
 import re
+import subprocess
+import sys
 import tempfile
 import threading
 from dataclasses import dataclass, field
@@ -205,6 +207,8 @@ class FinGPTEventExtractor(FilingEventExtractor):
     ollama_model: str = "fingpt"
     ollama_base_url: str = "http://localhost:11434"
     ollama_timeout: float = 60.0
+    # MLX 서브프로세스 (PyTorch Metal 충돌 격리용, 내부 상태)
+    _mlx_proc: Any = field(default=None, init=False, repr=False, compare=False)
 
     def _load_lock_path(self) -> str | None:
         if self.single_load_lock_path:
@@ -313,23 +317,50 @@ class FinGPTEventExtractor(FilingEventExtractor):
             return self._load_llamacpp_runtime()
         raise ValueError(f"Unsupported FinGPT runtime: {runtime}")
 
+    def _start_mlx_worker(self) -> None:
+        path = self.runtime_model_path
+        if not path:
+            raise ValueError("runtime_model_path is required for FinGPT MLX subprocess runtime.")
+        worker = Path(__file__).resolve().parents[3] / "scripts" / "fingpt_mlx_worker.py"
+        if not worker.exists():
+            raise RuntimeError(f"MLX worker script not found: {worker}")
+        self._mlx_proc = subprocess.Popen(
+            [sys.executable, str(worker), str(path)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        ready_raw = self._mlx_proc.stdout.readline()
+        if not ready_raw:
+            raise RuntimeError("MLX worker exited before sending ready signal.")
+        ready = json.loads(ready_raw.strip())
+        if "error" in ready:
+            raise RuntimeError(f"MLX worker 시작 실패: {ready['error']}")
+
     def _generate_with_mlx(self, text: str) -> str:
-        tokenizer, model = self._load_local_model()
+        if self._mlx_proc is None or self._mlx_proc.poll() is not None:
+            self._start_mlx_worker()
         prompt = _event_extraction_prompt(text)
-        try:
-            from mlx_lm import generate
-        except ImportError as exc:
-            raise RuntimeError("mlx_lm is required for FinGPT MLX generation.") from exc
-        try:
-            generated = generate(model, tokenizer, prompt, max_tokens=self.max_new_tokens)
-        except TypeError:
-            generated = generate(
-                model=model,
-                tokenizer=tokenizer,
-                prompt=prompt,
-                max_tokens=self.max_new_tokens,
-            )
-        return _coerce_generation_text(generated)
+        # 프롬프트를 한 줄로 직렬화 (개행 제거)
+        safe_prompt = prompt.replace("\n", " ").replace("\r", " ")
+        assert self._mlx_proc is not None
+        self._mlx_proc.stdin.write(safe_prompt + "\n")  # type: ignore[union-attr]
+        self._mlx_proc.stdin.flush()  # type: ignore[union-attr]
+        response_raw = self._mlx_proc.stdout.readline()  # type: ignore[union-attr]
+        if not response_raw:
+            raise RuntimeError("MLX worker closed pipe unexpectedly.")
+        response = json.loads(response_raw.strip())
+        if "error" in response:
+            raise RuntimeError(f"MLX worker 추론 오류: {response['error']}")
+        return response.get("response", "")
+
+    def __del__(self) -> None:
+        if self._mlx_proc is not None and self._mlx_proc.poll() is None:
+            with contextlib.suppress(Exception):
+                self._mlx_proc.stdin.close()  # type: ignore[union-attr]
+            with contextlib.suppress(Exception):
+                self._mlx_proc.wait(timeout=5)
 
     def _generate_with_llamacpp(self, text: str) -> str:
         _, model = self._load_local_model()
