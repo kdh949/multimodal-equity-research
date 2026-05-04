@@ -4,6 +4,8 @@ import pandas as pd
 import streamlit as st
 
 from quant_research.config import DEFAULT_TICKERS
+from quant_research.dashboard import build_beginner_research_dashboard
+from quant_research.dashboard.streamlit import render_beginner_overview
 from quant_research.pipeline import PipelineConfig, run_research_pipeline
 
 st.set_page_config(
@@ -19,12 +21,16 @@ with st.sidebar:
     st.header("Run")
     data_mode = st.selectbox("Data mode", ["synthetic", "live"], index=0)
     tickers_text = st.text_area("Tickers", ", ".join(DEFAULT_TICKERS), height=90)
+    sidebar_tickers = [ticker.strip().upper() for ticker in tickers_text.split(",") if ticker.strip()]
+    if not sidebar_tickers:
+        sidebar_tickers = list(DEFAULT_TICKERS)
+    focus_ticker = st.selectbox("Focus ticker", sidebar_tickers, index=0)
     top_n = st.slider("Top N", min_value=1, max_value=8, value=3)
     train_periods = st.slider("Train periods", min_value=30, max_value=300, value=90, step=10)
     test_periods = st.slider("Test periods", min_value=5, max_value=60, value=20, step=5)
     cost_bps = st.slider("Cost bps", min_value=0.0, max_value=50.0, value=5.0, step=0.5)
     slippage_bps = st.slider("Slippage bps", min_value=0.0, max_value=50.0, value=2.0, step=0.5)
-    sentiment_model = st.selectbox("Sentiment model", ["finbert", "keyword"], index=0)
+    sentiment_model = st.selectbox("Sentiment model", ["keyword", "finbert"], index=0)
     time_series_inference_mode = st.selectbox("Time-series inference", ["proxy", "local"], index=0)
     max_ts_windows = st.number_input(
         "Local TS inference windows",
@@ -46,8 +52,8 @@ with st.sidebar:
         )
         granite_ttm_revision = st.text_input("Granite revision", value="")
         finma_model_id = st.text_input("FinMA model", value="ChanceFocus/finma-7b-nlp")
-        fingpt_model_id = st.text_input("FinGPT adapter", value="FinGPT/fingpt-mt_llama2-7b_lora")
-        fingpt_base_model_id = st.text_input("FinGPT base model", value="meta-llama/Llama-2-7b-hf")
+        fingpt_model_id = st.text_input("FinGPT adapter", value="FinGPT/fingpt-mt_llama3-8b_lora")
+        fingpt_base_model_id = st.text_input("FinGPT base model", value="meta-llama/Meta-Llama-3-8B")
     max_symbol_weight = st.slider("Max symbol weight", min_value=0.05, max_value=1.0, value=0.35, step=0.05)
     portfolio_volatility_limit = st.slider(
         "Portfolio volatility limit",
@@ -67,6 +73,8 @@ if data_mode == "live":
     )
 
 tickers = [ticker.strip().upper() for ticker in tickers_text.split(",") if ticker.strip()]
+if not tickers:
+    tickers = list(DEFAULT_TICKERS)
 config = PipelineConfig(
     tickers=tickers,
     data_mode=data_mode,
@@ -100,6 +108,9 @@ if run or "result" not in st.session_state:
 
 result = st.session_state["result"]
 metrics = result.backtest.metrics
+dashboard = build_beginner_research_dashboard(result, focus_ticker, config)
+
+render_beginner_overview(dashboard)
 
 metric_cols = st.columns(6)
 metric_cols[0].metric("CAGR", f"{metrics.cagr:.2%}")
@@ -123,7 +134,7 @@ with tabs[1]:
     latest_date = result.signals["date"].max()
     latest = (
         result.signals[result.signals["date"] == latest_date]
-        .sort_values(["action", "signal_score"], ascending=[True, False])
+        .sort_values("signal_score", ascending=False)
         .reset_index(drop=True)
     )
     st.dataframe(
@@ -131,7 +142,6 @@ with tabs[1]:
             [
                 "date",
                 "ticker",
-                "action",
                 "signal_score",
                 "expected_return",
                 "predicted_volatility",

@@ -152,8 +152,8 @@ class FilingEventExtractor:
 
 @dataclass
 class FinGPTEventExtractor(FilingEventExtractor):
-    model_id: str = "FinGPT/fingpt-mt_llama2-7b_lora"
-    base_model_id: str | None = "meta-llama/Llama-2-7b-hf"
+    model_id: str = "FinGPT/fingpt-mt_llama3-8b_lora"
+    base_model_id: str | None = "meta-llama/Meta-Llama-3-8B"
 
     def _load_local_model(self) -> tuple[Any, Any]:
         if self._tokenizer is None or self._model is None:
