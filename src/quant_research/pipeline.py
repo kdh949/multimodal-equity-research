@@ -21,7 +21,7 @@ from quant_research.data.sec import (
 )
 from quant_research.features.fusion import fuse_features
 from quant_research.features.price import build_price_features
-from quant_research.features.sec import build_sec_features
+from quant_research.features.sec import DEFAULT_FILING_EVENT_CACHE_PATH, build_sec_features
 from quant_research.features.text import KeywordSentimentAnalyzer, build_news_features
 from quant_research.models.text import (
     FilingEventExtractor,
@@ -94,6 +94,7 @@ class PipelineConfig:
     portfolio_volatility_limit: float = 0.04
     max_drawdown_stop: float = 0.20
     sec_frame_period: str = "CY2024Q4I"
+    sec_filing_event_cache_path: str | None = str(DEFAULT_FILING_EVENT_CACHE_PATH)
     enable_feature_model_ablation: bool = False
 
 
@@ -146,6 +147,11 @@ def run_research_pipeline(config: PipelineConfig | None = None) -> PipelineResul
         facts_by_ticker,
         price_features,
         filing_extractor=_filing_extractor(config),
+        filing_cache_path=(
+            config.sec_filing_event_cache_path
+            if config.enable_local_filing_llm
+            else None
+        ),
     )
 
     features = fuse_features(price_features, news_features, sec_features)
