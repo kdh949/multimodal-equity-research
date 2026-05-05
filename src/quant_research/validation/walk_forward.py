@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
@@ -23,6 +23,9 @@ class WalkForwardConfig:
     native_model_timeout_seconds: int = 180
     tabular_num_threads: int = 1
     embargo_periods: int = 0
+    target_horizon: int = 1
+    requested_gap_periods: int | None = None
+    requested_embargo_periods: int | None = None
 
 
 @dataclass(frozen=True)
@@ -34,12 +37,21 @@ class WalkForwardFold:
     test_end: pd.Timestamp
     train_dates: pd.DatetimeIndex
     test_dates: pd.DatetimeIndex
+    train_dates_before_purge: pd.DatetimeIndex = field(default_factory=lambda: pd.DatetimeIndex([]))
+    target_horizon: int = 1
+    requested_gap_periods: int = 1
+    requested_embargo_periods: int = 0
+    effective_gap_periods: int = 1
+    effective_embargo_periods: int = 0
+    purged_train_date_count: int = 0
+    label_overlap_violations: int = 0
 
 
 def walk_forward_splits(
     frame: pd.DataFrame,
     config: WalkForwardConfig,
     candidate_dates: pd.DatetimeIndex | None = None,
+    target_horizon: int | None = None,
 ) -> list[WalkForwardFold]:
     if candidate_dates is None:
         if "date" not in frame.columns:
@@ -50,18 +62,40 @@ def walk_forward_splits(
     if len(dates) == 0:
         return []
 
+    horizon = max(1, int(target_horizon or config.target_horizon or 1))
+    requested_gap = int(config.requested_gap_periods if config.requested_gap_periods is not None else config.gap_periods)
+    requested_embargo = int(
+        config.requested_embargo_periods
+        if config.requested_embargo_periods is not None
+        else config.embargo_periods
+    )
+    effective_gap = max(0, requested_gap, horizon)
+    effective_embargo = max(0, requested_embargo, horizon)
+    date_position = {date: position for position, date in enumerate(dates)}
     folds: list[WalkForwardFold] = []
     start = 0
     fold_id = 0
     while True:
         train_start_idx = start
         train_end_idx = train_start_idx + config.train_periods
-        test_start_idx = train_end_idx + config.gap_periods
+        test_start_idx = train_end_idx + effective_gap
         if test_start_idx >= len(dates):
             break
         test_end_idx = min(test_start_idx + config.test_periods, len(dates))
-        train_dates = dates[train_start_idx:train_end_idx]
+        train_dates_before_purge = dates[train_start_idx:train_end_idx]
         test_dates = dates[test_start_idx:test_end_idx]
+        train_dates = _purge_overlapping_train_dates(
+            train_dates_before_purge,
+            test_dates,
+            date_position,
+            horizon,
+        )
+        overlap_violations = _count_label_interval_overlaps(
+            train_dates,
+            test_dates,
+            date_position,
+            horizon,
+        )
         if len(train_dates) == 0 or len(test_dates) == 0:
             break
         folds.append(
@@ -73,10 +107,18 @@ def walk_forward_splits(
                 test_end=test_dates.max(),
                 train_dates=train_dates,
                 test_dates=test_dates,
+                train_dates_before_purge=train_dates_before_purge,
+                target_horizon=horizon,
+                requested_gap_periods=requested_gap,
+                requested_embargo_periods=requested_embargo,
+                effective_gap_periods=effective_gap,
+                effective_embargo_periods=effective_embargo,
+                purged_train_date_count=len(train_dates_before_purge) - len(train_dates),
+                label_overlap_violations=overlap_violations,
             )
         )
         fold_id += 1
-        start = test_end_idx + max(0, int(config.embargo_periods))
+        start = test_end_idx + effective_embargo
         if test_end_idx >= len(dates):
             break
     return folds
@@ -94,7 +136,13 @@ def walk_forward_predict(
     labeled_dates = pd.DatetimeIndex(
         pd.to_datetime(frame.loc[frame[target].notna(), "date"]).dropna().dt.normalize().unique()
     )
-    folds = walk_forward_splits(frame, config, candidate_dates=labeled_dates)
+    target_horizon = _horizon_from_target(target) or max(1, int(config.target_horizon or 1))
+    folds = walk_forward_splits(
+        frame,
+        config,
+        candidate_dates=labeled_dates,
+        target_horizon=target_horizon,
+    )
     if not folds:
         return pd.DataFrame(), pd.DataFrame()
     final_fold_id = folds[-1].fold
@@ -145,9 +193,19 @@ def walk_forward_predict(
                 "test_start": fold.test_start,
                 "test_end": fold.test_end,
                 "train_observations": len(train),
+                "train_date_count_before_purge": len(fold.train_dates_before_purge),
+                "train_date_count_after_purge": len(fold.train_dates),
+                "purged_train_date_count": fold.purged_train_date_count,
                 "test_observations": len(test),
                 "labeled_test_observations": len(labeled),
                 "prediction_count": len(pred),
+                "target_column": target,
+                "target_horizon": fold.target_horizon,
+                "requested_gap_periods": fold.requested_gap_periods,
+                "requested_embargo_periods": fold.requested_embargo_periods,
+                "effective_gap_periods": fold.effective_gap_periods,
+                "effective_embargo_periods": fold.effective_embargo_periods,
+                "label_overlap_violations": fold.label_overlap_violations,
                 "fold_type": "oos" if fold.fold == final_fold_id else "validation",
                 "model_name": model.actual_model_name,
                 "is_oos": fold.fold == final_fold_id,
@@ -164,6 +222,61 @@ def walk_forward_predict(
     prediction_frame = pd.concat(predictions, ignore_index=True) if predictions else pd.DataFrame()
     summary_frame = pd.DataFrame(summaries)
     return prediction_frame, summary_frame
+
+
+def _purge_overlapping_train_dates(
+    train_dates: pd.DatetimeIndex,
+    test_dates: pd.DatetimeIndex,
+    date_position: dict[pd.Timestamp, int],
+    horizon: int,
+) -> pd.DatetimeIndex:
+    if len(train_dates) == 0 or len(test_dates) == 0:
+        return train_dates
+    kept = [
+        train_date
+        for train_date in train_dates
+        if not _label_interval_overlaps_any_test(train_date, test_dates, date_position, horizon)
+    ]
+    return pd.DatetimeIndex(kept)
+
+
+def _count_label_interval_overlaps(
+    train_dates: pd.DatetimeIndex,
+    test_dates: pd.DatetimeIndex,
+    date_position: dict[pd.Timestamp, int],
+    horizon: int,
+) -> int:
+    return sum(
+        1
+        for train_date in train_dates
+        if _label_interval_overlaps_any_test(train_date, test_dates, date_position, horizon)
+    )
+
+
+def _label_interval_overlaps_any_test(
+    train_date: pd.Timestamp,
+    test_dates: pd.DatetimeIndex,
+    date_position: dict[pd.Timestamp, int],
+    horizon: int,
+) -> bool:
+    train_start = date_position[pd.Timestamp(train_date)]
+    train_end = train_start + horizon
+    for test_date in test_dates:
+        test_start = date_position[pd.Timestamp(test_date)]
+        test_end = test_start + horizon
+        if train_start <= test_end and test_start <= train_end:
+            return True
+    return False
+
+
+def _horizon_from_target(target: str) -> int | None:
+    prefix = "forward_return_"
+    if not target.startswith(prefix):
+        return None
+    try:
+        return int(target.removeprefix(prefix))
+    except ValueError:
+        return None
 
 
 def _safe_correlation(left: pd.Series, right: pd.Series) -> float | None:

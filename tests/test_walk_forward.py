@@ -62,8 +62,50 @@ def test_walk_forward_splits_respects_custom_dates_and_embargo() -> None:
         assert set(fold.test_dates).issubset(set(candidate_dates))
         assert max(fold.train_dates) < min(fold.test_dates)
     date_position = {date: position for position, date in enumerate(candidate_dates)}
+    effective_embargo = max(config.embargo_periods, config.target_horizon)
     for index, fold in enumerate(folds[:-1]):
-        assert date_position[folds[index + 1].train_start] == date_position[fold.test_end] + config.embargo_periods + 1
+        assert date_position[folds[index + 1].train_start] == date_position[fold.test_end] + effective_embargo + 1
+
+
+def test_walk_forward_predict_records_effective_horizon_guards() -> None:
+    dates = pd.bdate_range(start="2026-01-01", periods=120)
+    rows = []
+    for index, date_value in enumerate(dates):
+        for ticker_offset, ticker in enumerate(["AAPL", "MSFT"]):
+            rows.append(
+                {
+                    "date": date_value,
+                    "ticker": ticker,
+                    "feature_a": float(index + ticker_offset),
+                    "feature_b": float((index % 7) - ticker_offset),
+                    "forward_return_5": None if index >= len(dates) - 5 else 0.001 * ((index + ticker_offset) % 9 - 4),
+                }
+            )
+    frame = pd.DataFrame(rows)
+
+    predictions, summary = walk_forward_predict(
+        frame,
+        WalkForwardConfig(
+            train_periods=35,
+            test_periods=8,
+            gap_periods=1,
+            embargo_periods=0,
+            min_train_observations=35,
+            model_name="hist_gradient",
+            native_tabular_isolation=False,
+        ),
+        target="forward_return_5",
+    )
+
+    assert not predictions.empty
+    assert not summary.empty
+    assert summary["target_column"].eq("forward_return_5").all()
+    assert summary["target_horizon"].eq(5).all()
+    assert summary["requested_gap_periods"].eq(1).all()
+    assert summary["requested_embargo_periods"].eq(0).all()
+    assert summary["effective_gap_periods"].eq(5).all()
+    assert summary["effective_embargo_periods"].eq(5).all()
+    assert summary["label_overlap_violations"].eq(0).all()
 
 
 def test_walk_forward_predict_skips_targetless_dates() -> None:
