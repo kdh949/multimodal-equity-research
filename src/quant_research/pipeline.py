@@ -575,6 +575,7 @@ def _backtest_config(
         top_n=config.top_n,
         cost_bps=config.cost_bps if cost_bps is None else cost_bps,
         slippage_bps=config.slippage_bps if slippage_bps is None else slippage_bps,
+        realized_return_column=config.prediction_target_column,
         max_symbol_weight=config.max_symbol_weight,
         portfolio_volatility_limit=config.portfolio_volatility_limit,
         max_drawdown_stop=config.max_drawdown_stop,
@@ -592,6 +593,9 @@ def _walk_forward_config(config: PipelineConfig) -> WalkForwardConfig:
         native_model_timeout_seconds=config.native_model_timeout_seconds,
         tabular_num_threads=config.tabular_num_threads,
         embargo_periods=max(config.embargo_periods, horizon),
+        target_horizon=horizon,
+        requested_gap_periods=config.gap_periods,
+        requested_embargo_periods=config.embargo_periods,
     )
 
 

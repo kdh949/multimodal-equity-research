@@ -173,7 +173,47 @@ def test_walk_forward_config_carries_native_runtime_guards() -> None:
     assert walk_config.test_periods == 9
     assert walk_config.gap_periods == 2
     assert walk_config.embargo_periods == 3
+    assert walk_config.target_horizon == 1
+    assert walk_config.requested_gap_periods == 2
+    assert walk_config.requested_embargo_periods == 3
     assert walk_config.model_name == "lightgbm"
     assert walk_config.native_tabular_isolation is False
     assert walk_config.native_model_timeout_seconds == 11
     assert walk_config.tabular_num_threads == 3
+
+
+@pytest.mark.parametrize("target_column,horizon", [("forward_return_1", 1), ("forward_return_5", 5), ("forward_return_20", 20)])
+def test_synthetic_pipeline_runs_with_selected_return_horizon(target_column: str, horizon: int) -> None:
+    result = run_research_pipeline(
+        PipelineConfig(
+            tickers=["SPY", "AAPL"],
+            data_mode="synthetic",
+            train_periods=50,
+            test_periods=8,
+            gap_periods=1,
+            embargo_periods=0,
+            top_n=1,
+            model_name="hist_gradient",
+            prediction_target_column=target_column,
+            required_validation_horizon=horizon,
+            time_series_inference_mode="proxy",
+            sentiment_model="keyword",
+            filing_extractor_model="rules",
+            enable_local_filing_llm=False,
+            native_tabular_isolation=False,
+        )
+    )
+
+    assert not result.predictions.empty
+    assert target_column in result.predictions
+    assert result.validation_summary["target_column"].eq(target_column).all()
+    assert result.validation_summary["target_horizon"].eq(horizon).all()
+    assert result.validation_summary["requested_gap_periods"].eq(1).all()
+    assert result.validation_summary["requested_embargo_periods"].eq(0).all()
+    assert result.validation_summary["effective_gap_periods"].ge(horizon).all()
+    assert result.validation_summary["effective_embargo_periods"].ge(horizon).all()
+    assert result.validation_summary["label_overlap_violations"].eq(0).all()
+    assert result.backtest.equity_curve["realized_return_column"].eq(target_column).all()
+    assert result.validity_report is not None
+    assert result.validity_report.realized_return_column == target_column
+    assert result.validity_report.target_horizon == horizon

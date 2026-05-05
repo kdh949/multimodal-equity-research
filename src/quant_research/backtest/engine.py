@@ -15,6 +15,7 @@ class BacktestConfig:
     cost_bps: float = 5.0
     slippage_bps: float = 2.0
     benchmark_ticker: str = "SPY"
+    realized_return_column: str = "forward_return_1"
     max_symbol_weight: float = 0.35
     portfolio_volatility_limit: float = 0.04
     max_drawdown_stop: float = 0.20
@@ -33,6 +34,7 @@ def run_long_only_backtest(frame: pd.DataFrame, config: BacktestConfig | None = 
     signal_config = SignalEngineConfig(cost_bps=config.cost_bps, slippage_bps=config.slippage_bps)
     signal_engine = DeterministicSignalEngine(signal_config)
     signals = signal_engine.generate(frame)
+    realized_return_column = config.realized_return_column
 
     dates = sorted(signals["date"].dropna().unique())
     previous_weights: dict[str, float] = {}
@@ -46,7 +48,8 @@ def run_long_only_backtest(frame: pd.DataFrame, config: BacktestConfig | None = 
 
     for idx, current_date in enumerate(dates):
         day = signals[signals["date"] == current_date].copy()
-        effective_date = dates[idx + 1] if idx + 1 < len(dates) else pd.NaT
+        horizon = _horizon_from_target(realized_return_column) or 1
+        effective_date = dates[idx + horizon] if idx + horizon < len(dates) else pd.NaT
 
         current_drawdown = equity / peak_equity - 1
         if current_drawdown <= -abs(config.max_drawdown_stop):
@@ -62,7 +65,10 @@ def run_long_only_backtest(frame: pd.DataFrame, config: BacktestConfig | None = 
         turnover = sum(abs(target_weights.get(ticker, 0.0) - previous_weights.get(ticker, 0.0)) for ticker in tickers)
         gross_return = 0.0
         for ticker, weight in target_weights.items():
-            realized = day.loc[day["ticker"] == ticker, "forward_return_1"]
+            if realized_return_column not in day:
+                realized = pd.Series(dtype=float)
+            else:
+                realized = day.loc[day["ticker"] == ticker, realized_return_column]
             if not realized.empty and pd.notna(realized.iloc[0]):
                 gross_return += weight * float(realized.iloc[0])
             weight_rows.append(
@@ -75,7 +81,7 @@ def run_long_only_backtest(frame: pd.DataFrame, config: BacktestConfig | None = 
             )
 
         net_return = gross_return - turnover * cost_rate
-        benchmark_return = _benchmark_return(day, config.benchmark_ticker)
+        benchmark_return = _benchmark_return(day, config.benchmark_ticker, realized_return_column)
         equity *= 1 + net_return
         peak_equity = max(peak_equity, equity)
         benchmark_equity *= 1 + benchmark_return
@@ -92,6 +98,7 @@ def run_long_only_backtest(frame: pd.DataFrame, config: BacktestConfig | None = 
                 "exposure": sum(target_weights.values()),
                 "portfolio_volatility_estimate": _portfolio_volatility_estimate(day, target_weights),
                 "risk_stop_active": risk_stop_active,
+                "realized_return_column": realized_return_column,
             }
         )
         previous_weights = target_weights
@@ -102,11 +109,23 @@ def run_long_only_backtest(frame: pd.DataFrame, config: BacktestConfig | None = 
     return BacktestResult(equity_curve=equity_curve, weights=weights, signals=signals, metrics=metrics)
 
 
-def _benchmark_return(day: pd.DataFrame, benchmark_ticker: str) -> float:
-    benchmark = day.loc[day["ticker"] == benchmark_ticker, "forward_return_1"]
+def _benchmark_return(day: pd.DataFrame, benchmark_ticker: str, realized_return_column: str) -> float:
+    if realized_return_column not in day:
+        return 0.0
+    benchmark = day.loc[day["ticker"] == benchmark_ticker, realized_return_column]
     if benchmark.empty or pd.isna(benchmark.iloc[0]):
         return 0.0
     return float(benchmark.iloc[0])
+
+
+def _horizon_from_target(target: str) -> int | None:
+    prefix = "forward_return_"
+    if not target.startswith(prefix):
+        return None
+    try:
+        return int(target.removeprefix(prefix))
+    except ValueError:
+        return None
 
 
 def _select_stateful_targets(

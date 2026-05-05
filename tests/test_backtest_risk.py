@@ -71,11 +71,37 @@ def test_backtest_records_next_period_weight_timing() -> None:
     assert result.weights["effective_date"].iloc[0] > result.weights["signal_date"].iloc[0]
 
 
+def test_backtest_uses_configured_realized_return_horizon() -> None:
+    dates = pd.bdate_range("2026-01-01", periods=8)
+    frame = _prediction_frame(
+        returns=[-0.10] * len(dates),
+        forward_returns_5=[0.02] * len(dates),
+        tickers=["AAPL"] * len(dates),
+        dates=[str(date.date()) for date in dates],
+    )
+
+    result = run_long_only_backtest(
+        frame,
+        BacktestConfig(
+            top_n=1,
+            max_symbol_weight=1.0,
+            cost_bps=0.0,
+            slippage_bps=0.0,
+            realized_return_column="forward_return_5",
+        ),
+    )
+
+    assert result.equity_curve["portfolio_return"].iloc[0] == 0.02
+    assert result.equity_curve["realized_return_column"].eq("forward_return_5").all()
+    assert result.equity_curve["return_date"].iloc[0] == dates[5]
+
+
 def _prediction_frame(
     returns: list[float],
     tickers: list[str],
     dates: list[str],
     volatility: float = 0.01,
+    forward_returns_5: list[float] | None = None,
 ) -> pd.DataFrame:
     return pd.DataFrame(
         {
@@ -91,5 +117,6 @@ def _prediction_frame(
             "news_negative_ratio": [0.0] * len(dates),
             "liquidity_score": [20.0] * len(dates),
             "forward_return_1": returns,
+            "forward_return_5": forward_returns_5 if forward_returns_5 is not None else returns,
         }
     )
