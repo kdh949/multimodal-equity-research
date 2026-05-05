@@ -22,10 +22,14 @@
 ## Stage 2 — 멀티타겟 + Embargo/Purge
 예측 타깃을 1일 외에 5일/20일 등으로 확장하고, 데이터 분할 시 lookahead를 막기 위해 embargo/purge를 적용한다.
 
-- 멀티 타임스케일(예: 1d/5d/20d/1m) 예측 아웃풋 저장
-- Embargo 구간과 purge window 고정 정책 설정
-- Fold 간 leakage 경로 재점검
-- 다중 타깃에서도 동일 gate 계약이 유지되는지 확인
+- `forward_return_1`, `forward_return_5`, `forward_return_20` 라벨을 생성하되, 한 번의 파이프라인 실행은 설정된 `prediction_target_column` 하나만 학습/검증 타깃으로 사용한다.
+- 라벨 컬럼은 모델 입력 feature에서 항상 제외하고, 리포트/coverage metadata로만 추적한다.
+- `requested_gap_periods`, `requested_embargo_periods`는 사용자가 요청한 값으로 보존한다.
+- 실제 분할에는 `effective_gap_periods=max(requested_gap_periods, target_horizon)`, `effective_embargo_periods=max(requested_embargo_periods, target_horizon)`를 적용한다.
+- 요청 gap/embargo가 horizon보다 짧으면 warning으로 기록하되, effective 값이 horizon 이상이면 hard fail로 보지 않는다.
+- train label interval이 test label interval과 겹치지 않도록 purge 검사를 수행하고, 남은 overlap은 hard fail 처리한다.
+- 백테스트 실현 수익률, SPY benchmark, equal-weight benchmark는 모두 선택된 horizon의 `forward_return_*` 컬럼을 사용한다.
+- Stage 2 통과 후 Stage 3 유니버스 확장으로 넘어간다.
 
 ## Stage 3 — 유니버스 확장
 기초 종목군을 벗어나 표준 유니버스(예: S&P 500 하위, 섹터 분할)로 확장한다.
@@ -58,11 +62,10 @@
 - “LLM은 신호 결정이 아닌 feature 생성 보조” 가정의 실증
 - value proof: 비용·슬리피지·OOS 성능에서 개선폭이 있는 조합만 채택
 
-## 실행 오케스트레이션 정책
-- 메인 에이전트가 전체 작업 흐름을 분해해 Stage별 책임자를 배정한다.
-- 단순하고 분리 가능한 작업은 GPT-5.3-Codex-Spark `xhigh` 워커로 병렬 실행한다.
-- 메인 에이전트가 최종 설계 판단, 통합, 테스트 실행, 충돌 조정, 병합을 수행한다.
-- Scope 충돌 가능성이 있으면 즉시 통합 중단 후 설계 재합의.
+## 실행 원칙
+- 각 Stage는 이전 Stage의 산출물/계약/테스트가 통과했다는 전제에서 순차 실행한다.
+- Stage별 변경은 기능 또는 의미 단위로 커밋한다.
+- Scope 충돌 가능성이 있으면 즉시 구현을 중단하고 설계를 재확인한다.
 
 ## 운영 제약
 - 실거래 주문 기능은 구현하지 않는다. v1은 리서치/백테스트/검증/리포트까지.

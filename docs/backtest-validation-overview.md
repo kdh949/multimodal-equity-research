@@ -11,7 +11,7 @@
 |---|---|
 | 예측 모델 | LightGBM (TabularReturnModel) |
 | 검증 방식 | Walk-Forward Cross-Validation |
-| 예측 대상 | 1일 선행 수익률 (`forward_return_1`) |
+| 예측 대상 | 설정된 선행 수익률 horizon (`forward_return_1`, `forward_return_5`, `forward_return_20` 중 하나) |
 | 입력 피처 | 가격·기술지표·거래량·뉴스감성·SEC공시 등 융합 피처 |
 
 ## 사용 데이터
@@ -37,7 +37,7 @@ SEC 공시 피처 생성 (규칙 기반)
         ↓
 피처 융합 (fuse_features)
         ↓
-Walk-Forward 분할 (훈련 90일 / 테스트 20일 / 간격 1일)
+Walk-Forward 분할 (훈련 90일 / 테스트 20일 / effective gap/embargo ≥ 선택 horizon)
         ↓
 각 Fold: LightGBM 학습 → OOS 예측
         ↓
@@ -64,10 +64,22 @@ Walk-Forward 분할 (훈련 90일 / 테스트 20일 / 간격 1일)
 |---|---|
 | `date` | 예측 대상 날짜 |
 | `ticker` | 종목 코드 |
-| `expected_return` | 모델이 예측한 1일 수익률 |
-| `forward_return_1` | 실제 발생한 1일 수익률 |
+| `expected_return` | 모델이 예측한 선택 horizon 수익률 |
+| `forward_return_*` | 실제 발생한 horizon별 수익률 라벨. 모델 입력에는 사용하지 않고, 선택된 하나만 검증/백테스트 실현 수익률로 사용 |
 | `fold` | 속한 Walk-Forward fold 번호 |
 | `is_oos` | 마지막 fold(Out-of-Sample) 여부 |
+
+### validation_summary.csv 주요 컬럼
+
+| 컬럼 | 의미 |
+|---|---|
+| `target_column` | 해당 실행에서 학습/검증에 사용한 `forward_return_*` 컬럼 |
+| `target_horizon` | 선택 target의 거래일 horizon |
+| `requested_gap_periods` | 사용자가 요청한 train/test gap |
+| `requested_embargo_periods` | 사용자가 요청한 fold 이후 embargo |
+| `effective_gap_periods` | 실제 분할에 적용한 gap. 최소 선택 horizon 이상 |
+| `effective_embargo_periods` | 실제 분할에 적용한 embargo. 최소 선택 horizon 이상 |
+| `label_overlap_violations` | purge 이후에도 train/test label interval이 겹친 수 |
 
 ### metrics.json 주요 키
 
