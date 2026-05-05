@@ -30,8 +30,8 @@ with st.sidebar:
     test_periods = st.slider("Test periods", min_value=5, max_value=60, value=20, step=5)
     cost_bps = st.slider("Cost bps", min_value=0.0, max_value=50.0, value=5.0, step=0.5)
     slippage_bps = st.slider("Slippage bps", min_value=0.0, max_value=50.0, value=2.0, step=0.5)
-    sentiment_model = st.selectbox("Sentiment model", ["keyword", "finbert"], index=0)
-    time_series_inference_mode = st.selectbox("Time-series inference", ["proxy", "local"], index=0)
+    sentiment_model = st.selectbox("Sentiment model", ["keyword", "finbert"], index=1)
+    time_series_inference_mode = st.selectbox("Time-series inference", ["proxy", "local"], index=1)
     max_ts_windows = st.number_input(
         "Local TS inference windows",
         min_value=1,
@@ -40,8 +40,8 @@ with st.sidebar:
         step=1,
         help="Only used when local time-series inference is selected.",
     )
-    filing_extractor_model = st.selectbox("Filing extractor", ["rules", "finma", "fingpt"], index=0)
-    enable_local_filing_llm = st.checkbox("Use local filing LLM", value=False)
+    filing_extractor_model = st.selectbox("Filing extractor", ["rules", "finma", "fingpt"], index=2)
+    enable_local_filing_llm = st.checkbox("Use local filing LLM", value=True)
     defaults = PipelineConfig()
     fingpt_runtime_options = ("transformers", "mlx", "llama-cpp")
     fingpt_default_runtime = defaults.fingpt_runtime

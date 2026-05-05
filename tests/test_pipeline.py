@@ -42,6 +42,30 @@ def test_synthetic_pipeline_runs_end_to_end() -> None:
     }
 
 
+def test_synthetic_pipeline_features_include_recency_coverage_news_columns() -> None:
+    result = run_research_pipeline(
+        PipelineConfig(
+            tickers=["AAPL", "MSFT"],
+            data_mode="synthetic",
+            train_periods=60,
+            test_periods=15,
+            top_n=2,
+        )
+    )
+
+    for column in [
+        "news_recency_decay",
+        "news_staleness_days",
+        "news_coverage_5d",
+        "news_coverage_20d",
+    ]:
+        assert column in result.features.columns
+        assert pd.api.types.is_numeric_dtype(result.features[column])
+    assert result.features["news_coverage_20d"].ge(0).all()
+    assert result.features["news_coverage_5d"].ge(0).all()
+    assert result.features["news_staleness_days"].ge(0).all()
+
+
 def test_attach_signal_features_preserves_sec_strings() -> None:
     predictions = pd.DataFrame(
         {

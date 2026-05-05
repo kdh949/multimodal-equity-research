@@ -28,6 +28,17 @@ _LOCK_CATALOG: dict[str, threading.Lock] = {}
 _LOCK_CATALOG_GUARD = threading.Lock()
 
 
+def _canonical_sentiment_payload(payload: dict[str, float | str | bool]) -> dict[str, float | str | bool]:
+    return {
+        "sentiment_score": float(payload.get("sentiment_score", 0.0)),
+        "negative_flag": bool(payload.get("negative_flag", False)),
+        "label": str(payload.get("label", "neutral")),
+        "confidence": float(payload.get("confidence", 0.0)),
+        "event_tag": str(payload.get("event_tag", "")),
+        "risk_flag": bool(payload.get("risk_flag", False)),
+    }
+
+
 def _mlx_worker_loop(model_path: str, req_queue: Any, resp_queue: Any) -> None:
     """MLX 추론 워커 — spawn된 별도 프로세스에서 실행 (Metal 컨텍스트 격리).
 
@@ -58,6 +69,7 @@ def _mlx_worker_loop(model_path: str, req_queue: Any, resp_queue: Any) -> None:
 class FinBERTSentimentAnalyzer:
     model_id: str = "ProsusAI/finbert"
     device: str | None = None
+    local_files_only: bool = False
     _pipeline: Any = None
     _fallback: KeywordSentimentAnalyzer = field(default_factory=KeywordSentimentAnalyzer)
 
@@ -65,23 +77,40 @@ class FinBERTSentimentAnalyzer:
         try:
             import transformers  # noqa: F401
 
+            if self.local_files_only:
+                return self._has_local_model()
             return True
-        except ImportError:
+        except Exception:
             return False
 
     def score(self, text: str) -> dict[str, float | str | bool]:
         if self._pipeline is None:
+            if self.local_files_only and not self._has_local_model():
+                return _canonical_sentiment_payload(self._fallback.score(text))
+            previous_hf_offline = os.environ.get("HF_HUB_OFFLINE")
             try:
+                if self.local_files_only:
+                    os.environ["HF_HUB_OFFLINE"] = "1"
                 from transformers import pipeline
 
                 kwargs: dict[str, object] = {"top_k": None}
                 if self.device is not None:
                     kwargs["device"] = self.device
+                if self.local_files_only:
+                    model_kwargs: dict[str, object] = {}
+                    model_kwargs["local_files_only"] = True
+                    kwargs["model_kwargs"] = model_kwargs
                 self._pipeline = pipeline("text-classification", model=self.model_id, **kwargs)
             except Exception:
-                return self._fallback.score(text)
+                return _canonical_sentiment_payload(self._fallback.score(text))
+            finally:
+                if self.local_files_only:
+                    if previous_hf_offline is None:
+                        os.environ.pop("HF_HUB_OFFLINE", None)
+                    else:
+                        os.environ["HF_HUB_OFFLINE"] = previous_hf_offline
 
-        result = self._pipeline(text[:3000])
+        result = self._pipeline(text[:3000], truncation=True, max_length=512)
         labels = {item["label"].lower(): float(item["score"]) for item in result[0]}
         positive = labels.get("positive", 0.0)
         negative = labels.get("negative", 0.0)
@@ -96,6 +125,31 @@ class FinBERTSentimentAnalyzer:
             "event_tag": "",
             "risk_flag": negative > 0.5,
         }
+
+    def _has_local_model(self) -> bool:
+        if not self.local_files_only:
+            return True
+        previous_hf_offline = os.environ.get("HF_HUB_OFFLINE")
+        if previous_hf_offline is None:
+            os.environ["HF_HUB_OFFLINE"] = "1"
+        try:
+            from transformers import (
+                AutoConfig,
+                AutoModelForSequenceClassification,
+                AutoTokenizer,
+            )
+
+            AutoConfig.from_pretrained(self.model_id, local_files_only=True)
+            AutoTokenizer.from_pretrained(self.model_id, local_files_only=True)
+            AutoModelForSequenceClassification.from_pretrained(self.model_id, local_files_only=True)
+            return True
+        except Exception:
+            return False
+        finally:
+            if previous_hf_offline is None:
+                os.environ.pop("HF_HUB_OFFLINE", None)
+            else:
+                os.environ["HF_HUB_OFFLINE"] = previous_hf_offline
 
 
 @dataclass
@@ -112,6 +166,38 @@ class FilingEventExtractor:
     _model: Any = field(default=None, init=False, repr=False)
     last_source: str = field(default="rules", init=False)
     last_error: str | None = field(default=None, init=False)
+
+    def available(self) -> bool:
+        if not self.use_local_model:
+            return False
+        if self.local_files_only:
+            return self._has_local_model()
+        try:
+            import transformers  # noqa: F401
+
+            return True
+        except Exception:
+            return False
+
+    def _has_local_model(self) -> bool:
+        if not self.local_files_only:
+            return True
+        previous_hf_offline = os.environ.get("HF_HUB_OFFLINE")
+        if previous_hf_offline is None:
+            os.environ["HF_HUB_OFFLINE"] = "1"
+        try:
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+
+            AutoTokenizer.from_pretrained(self.model_id, local_files_only=True)
+            AutoModelForCausalLM.from_pretrained(self.model_id, local_files_only=True)
+            return True
+        except Exception:
+            return False
+        finally:
+            if previous_hf_offline is None:
+                os.environ.pop("HF_HUB_OFFLINE", None)
+            else:
+                os.environ["HF_HUB_OFFLINE"] = previous_hf_offline
 
     def _load_lock_path(self) -> str | None:
         if self.single_load_lock_path:
@@ -262,6 +348,67 @@ class FinGPTEventExtractor(FilingEventExtractor):
 
     def _normalized_runtime(self) -> str:
         return self.runtime_label
+
+    def available(self) -> bool:
+        if not self.use_local_model:
+            return False
+        if self._is_default_unquantized_guarded_transformers():
+            return False
+
+        runtime = self._normalized_runtime()
+        if runtime == "transformers":
+            return self._transformer_runtime_available()
+        if runtime == "mlx":
+            return bool(self.runtime_model_path and Path(self.runtime_model_path).exists())
+        if runtime in {"llama_cpp", "llama-cpp", "llamacpp"}:
+            return self._llamacpp_runtime_available()
+        if runtime == "ollama":
+            return False
+        return False
+
+    def _transformer_runtime_available(self) -> bool:
+        try:
+            from peft import PeftModel  # noqa: F401
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+        except Exception:
+            return False
+
+        if self.base_model_id:
+            if not _has_local_pretrained_model(
+                self.base_model_id,
+                self.local_files_only,
+                AutoModelForCausalLM.from_pretrained,
+            ):
+                return False
+            if self.local_files_only and not _has_local_pretrained_model(
+                self.model_id,
+                self.local_files_only,
+                AutoModelForCausalLM.from_pretrained,
+            ):
+                return False
+            return _has_local_pretrained_model(
+                self.base_model_id,
+                self.local_files_only,
+                AutoTokenizer.from_pretrained,
+            )
+
+        return (
+            _has_local_pretrained_model(self.model_id, self.local_files_only, AutoModelForCausalLM.from_pretrained)
+            and _has_local_pretrained_model(
+                self.model_id,
+                self.local_files_only,
+                AutoTokenizer.from_pretrained,
+            )
+        )
+
+    def _llamacpp_runtime_available(self) -> bool:
+        if not self.runtime_model_path:
+            return False
+        path = Path(self.runtime_model_path)
+        suffix = path.suffix.lower()
+        if suffix not in {".gguf", ".ggml"}:
+            return False
+        return path.exists()
 
     def _is_default_unquantized_guarded_transformers(self) -> bool:
         if self.allow_unquantized_transformers or self.allow_unquantized_fingpt:
@@ -521,6 +668,26 @@ def _extract_json_object(raw: str) -> str:
     if match:
         return match.group(0)
     raise ValueError("No JSON object found in model output")
+
+
+def _has_local_pretrained_model(model_id: str, local_files_only: bool, loader: Any) -> bool:
+    if not model_id:
+        return False
+    if not local_files_only:
+        return True
+    previous_hf_offline = os.environ.get("HF_HUB_OFFLINE")
+    if previous_hf_offline is None:
+        os.environ["HF_HUB_OFFLINE"] = "1"
+    try:
+        loader(model_id, local_files_only=True)
+        return True
+    except Exception:
+        return False
+    finally:
+        if previous_hf_offline is None:
+            os.environ.pop("HF_HUB_OFFLINE", None)
+        else:
+            os.environ["HF_HUB_OFFLINE"] = previous_hf_offline
 
 
 def _normalize_fingpt_runtime(raw: str | None) -> str:

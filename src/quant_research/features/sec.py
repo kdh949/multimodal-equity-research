@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections import Counter
 from collections.abc import Iterable
 from pathlib import Path
@@ -10,6 +11,11 @@ import pandas as pd
 
 DEFAULT_FILING_EVENT_CACHE_PATH = Path("data/processed") / "sec" / "filing_extraction_cache.jsonl"
 _CACHE_RECORD_VERSION = 1
+_SECTION_LIST_SEPARATOR = "|"
+_FILING_SECTION_RE = re.compile(
+    r"(?i)\bitem\s+([0-9]{1,2}(?:\.[0-9]{1,2})?[a-z]?)\b",
+)
+_FILING_SECTION_RISK_HINTS = ("risk", "litigation", "investigation", "bankruptcy", "fraud")
 
 
 def build_sec_features(
@@ -32,12 +38,28 @@ def build_sec_features(
             filing_cache_path,
         )
         features = features.merge(filing_daily, on=["date", "ticker"], how="left")
-        for column in ["sec_8k_count", "sec_10q_count", "sec_10k_count", "sec_form4_count", "sec_risk_flag"]:
+        for column in [
+            "sec_8k_count",
+            "sec_10q_count",
+            "sec_10k_count",
+            "sec_form4_count",
+            "sec_risk_flag",
+            "sec_filing_section_count",
+            "sec_filing_risk_section_count",
+        ]:
+            features[column] = features[column].fillna(0.0)
+            features[f"{column}_20d"] = features[column].rolling(20, min_periods=1).sum()
+        for column in [
+            "sec_filing_text_available",
+            "sec_filing_text_length",
+            "sec_filing_risk_keyword_count",
+        ]:
             features[column] = features[column].fillna(0.0)
             features[f"{column}_20d"] = features[column].rolling(20, min_periods=1).sum()
         features["sec_event_tag"] = features["sec_event_tag"].fillna("none")
         features["sec_event_confidence"] = features["sec_event_confidence"].fillna(0.0)
         features["sec_summary_ref"] = features["sec_summary_ref"].fillna("")
+        features["sec_filing_sections"] = features["sec_filing_sections"].fillna("")
 
         facts = facts_by_ticker.get(ticker, pd.DataFrame())
         features = _merge_fact_features(features, facts)
@@ -68,6 +90,12 @@ def _daily_filing_features(
                 "sec_event_tag",
                 "sec_event_confidence",
                 "sec_summary_ref",
+                "sec_filing_text_available",
+                "sec_filing_text_length",
+                "sec_filing_risk_keyword_count",
+                "sec_filing_section_count",
+                "sec_filing_risk_section_count",
+                "sec_filing_sections",
             ]
         )
     frame = filings.copy()
@@ -86,9 +114,16 @@ def _daily_filing_features(
     event_tags: list[str] = []
     confidences: list[float] = []
     summary_refs: list[str] = []
+    body_available: list[float] = []
+    body_lengths: list[float] = []
+    risk_keyword_counts: list[float] = []
+    filing_section_strings: list[str] = []
+    filing_section_counts: list[float] = []
+    filing_risk_section_counts: list[float] = []
 
     for row in frame.itertuples(index=False):
-        text = _build_filing_text(row)
+        body_text = _as_document_text(row)
+        text = _build_filing_text(row, body_text)
         cache_key = _build_filing_cache_key(row, text, extractor)
         cached = cache.get(cache_key)
 
@@ -96,11 +131,25 @@ def _daily_filing_features(
             event_tag = str(cached.get("event_tag", "none"))
             confidence = _safe_float(cached.get("confidence", 0.0))
             summary_ref = str(cached.get("summary_ref", ""))
+            risk_keyword_count = _safe_float(cached.get("risk_keyword_count", 0.0))
+            body_available_value = _safe_float(cached.get("body_available", 0.0))
+            body_length = _safe_float(cached.get("body_length", 0.0))
+            sections = _split_filing_sections(str(cached.get("sections", "")))
+            if not sections:
+                sections = _extract_filing_sections(body_text)
+            section_count = _safe_float(cached.get("section_count", _safe_float(len(sections))))
+            risk_section_count = _safe_float(cached.get("risk_section_count", _safe_float(_count_filing_risk_sections(body_text, sections))))
         else:
             extracted = extractor.extract(text)
             event_tag = str(extracted.get("event_tag", "none"))
             confidence = _safe_float(extracted.get("confidence", 0.0))
             summary_ref = str(extracted.get("summary_ref", ""))
+            risk_keyword_count = _count_filing_risk_keywords(body_text)
+            body_available_value = 1.0 if body_text else 0.0
+            body_length = float(len(body_text))
+            sections = _extract_filing_sections(body_text)
+            section_count = float(len(sections))
+            risk_section_count = _count_filing_risk_sections(body_text, sections)
             if cache_path is not None and _should_cache_extraction(extractor):
                 cache[cache_key] = {
                     "version": _CACHE_RECORD_VERSION,
@@ -108,13 +157,31 @@ def _daily_filing_features(
                     "confidence": confidence,
                     "summary_ref": summary_ref,
                     "risk_flag": bool(extracted.get("risk_flag", False)),
+                    "risk_keyword_count": risk_keyword_count,
+                    "body_available": body_available_value,
+                    "body_length": body_length,
+                    "section_count": section_count,
+                    "risk_section_count": risk_section_count,
+                    "sections": _SECTION_LIST_SEPARATOR.join(sections),
                 }
                 cache_updated = True
 
         event_tags.append(event_tag)
         confidences.append(confidence)
         summary_refs.append(summary_ref)
+        body_available.append(body_available_value)
+        body_lengths.append(body_length)
+        risk_keyword_counts.append(risk_keyword_count)
+        filing_section_strings.append(_SECTION_LIST_SEPARATOR.join(sections))
+        filing_section_counts.append(section_count)
+        filing_risk_section_counts.append(risk_section_count)
 
+    frame["sec_filing_text_available"] = body_available
+    frame["sec_filing_text_length"] = body_lengths
+    frame["sec_filing_risk_keyword_count"] = risk_keyword_counts
+    frame["sec_filing_sections"] = filing_section_strings
+    frame["sec_filing_section_count"] = filing_section_counts
+    frame["sec_filing_risk_section_count"] = filing_risk_section_counts
     frame["sec_event_tag"] = event_tags
     frame["sec_event_confidence"] = confidences
     frame["sec_summary_ref"] = summary_refs
@@ -123,11 +190,23 @@ def _daily_filing_features(
         _save_filing_extraction_cache(cache, cache_path)
 
     rows: list[dict[str, object]] = []
-    numeric_columns = ["sec_8k_count", "sec_10q_count", "sec_10k_count", "sec_form4_count", "sec_risk_flag"]
+    numeric_columns = [
+        "sec_8k_count",
+        "sec_10q_count",
+        "sec_10k_count",
+        "sec_form4_count",
+        "sec_risk_flag",
+        "sec_filing_text_available",
+        "sec_filing_text_length",
+        "sec_filing_risk_keyword_count",
+        "sec_filing_section_count",
+        "sec_filing_risk_section_count",
+    ]
     for (date, grouped_ticker), group in frame.groupby(["date", "ticker"]):
         event_counter = Counter(
             tag for tags in group["sec_event_tag"] for tag in str(tags).split(",") if tag and tag != "none"
         )
+        section_list = _merge_filing_sections(group["sec_filing_sections"])
         row = {
             "date": date,
             "ticker": grouped_ticker,
@@ -135,6 +214,7 @@ def _daily_filing_features(
             "sec_event_tag": event_counter.most_common(1)[0][0] if event_counter else "none",
             "sec_event_confidence": group["sec_event_confidence"].mean(),
             "sec_summary_ref": group["sec_summary_ref"].iloc[0],
+            "sec_filing_sections": _SECTION_LIST_SEPARATOR.join(section_list),
         }
         rows.append(row)
     return pd.DataFrame(rows).sort_values(["date", "ticker"])
@@ -194,6 +274,9 @@ def _load_filing_extraction_cache(cache_path: Path) -> dict[str, dict[str, objec
         key = entry.get("key")
         if not isinstance(key, str):
             continue
+        record_version = entry.get("version")
+        if record_version is not None and str(record_version) != str(_CACHE_RECORD_VERSION):
+            continue
         event_tag = entry.get("event_tag")
         if not isinstance(event_tag, str):
             event_tag = "none"
@@ -205,6 +288,12 @@ def _load_filing_extraction_cache(cache_path: Path) -> dict[str, dict[str, objec
             "risk_flag": bool(risk_flag),
             "confidence": confidence,
             "summary_ref": str(summary_ref) if summary_ref is not None else "",
+            "risk_keyword_count": _safe_float(entry.get("risk_keyword_count", 0.0)),
+            "body_available": _safe_float(entry.get("body_available", 0.0)),
+            "body_length": _safe_float(entry.get("body_length", 0.0)),
+            "section_count": _safe_float(entry.get("section_count", 0.0)),
+            "risk_section_count": _safe_float(entry.get("risk_section_count", 0.0)),
+            "sections": str(entry.get("sections", "")),
         }
     return data
 
@@ -257,8 +346,79 @@ def _save_filing_extraction_cache(cache: dict[str, dict[str, object]], cache_pat
         return
 
 
-def _build_filing_text(row: pd.Series | object) -> str:
+def _build_filing_text(row: pd.Series | object, body_text: str = "") -> str:
+    if _has_value(body_text):
+        return str(body_text)
     return f"Form {getattr(row, 'form', '')} {getattr(row, 'primary_document', '')}"
+
+
+def _as_document_text(row: pd.Series | object) -> str:
+    raw = getattr(row, "document_text", "")
+    if raw is None:
+        return ""
+    if isinstance(raw, float) and pd.isna(raw):
+        return ""
+    return str(raw)
+
+
+def _count_filing_risk_keywords(value: str) -> float:
+    return float(len(_FILING_RISK_KEYWORD_RE.findall(str(value))))
+
+
+def _extract_filing_sections(text: str) -> list[str]:
+    clean = re.sub(r"\s+", " ", str(text)).strip()
+    if not clean:
+        return []
+    sections: list[str] = []
+    for match in _FILING_SECTION_RE.finditer(clean):
+        token = _normalize_filing_section_token(match.group(1))
+        if token and token not in sections:
+            sections.append(token)
+    return sections
+
+
+def _split_filing_sections(raw_sections: str) -> list[str]:
+    values = []
+    for item in str(raw_sections).split(_SECTION_LIST_SEPARATOR):
+        section = item.strip().lower()
+        if section and section not in values:
+            values.append(section)
+    return values
+
+
+def _count_filing_risk_sections(text: str, sections: list[str]) -> float:
+    if sections:
+        return float(
+            sum(
+                1
+                for section in sections
+                if section.startswith("item_1a") or any(risk in section for risk in _FILING_SECTION_RISK_HINTS)
+            )
+        )
+    return float(1 if re.search(r"\bitem\s+1a\b", str(text), flags=re.IGNORECASE) else 0)
+
+
+def _merge_filing_sections(section_values: pd.Series) -> list[str]:
+    ordered_sections: list[str] = []
+    for entry in section_values.dropna():
+        for section in _split_filing_sections(str(entry)):
+            if section and section not in ordered_sections:
+                ordered_sections.append(section)
+    return ordered_sections
+
+
+_FILING_RISK_KEYWORD_RE = re.compile(
+    r"\b(?:risk|risks|restatement|lawsuit|investigation|impairment|litigation|bankruptcy|fraud|probe)\b",
+    re.IGNORECASE,
+)
+
+
+def _normalize_filing_section_token(value: str) -> str:
+    normalized = re.sub(r"\s+", "", value.lower())
+    if not normalized:
+        return ""
+    normalized = normalized.replace(".", "_").replace("-", "_")
+    return f"item_{normalized}"
 
 
 def _build_filing_cache_key(row: pd.Series | object, text: str, extractor: object) -> str:
