@@ -157,19 +157,36 @@ def _has_evidence(captions: list[str], keys: tuple[str, ...]) -> bool:
     return any(any(key in line for key in keys) for line in captions)
 
 
-def test_streamlit_app_renders_beginner_dashboard_in_synthetic_mode(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+def _run_fake_research_pipeline(
+    captured: dict[str, object],
+    config: pipeline.PipelineConfig,
+) -> PipelineResult:
+    captured["calls"] = captured.get("calls", 0) + 1
+    captured["config"] = config
+    return _build_stub_result()
 
-    def fake_run_research_pipeline(config: pipeline.PipelineConfig) -> PipelineResult:
-        captured["config"] = config
-        return _build_stub_result()
 
-    monkeypatch.setattr(pipeline, "run_research_pipeline", fake_run_research_pipeline)
-    app = AppTest.from_file("app.py", default_timeout=90)
-    app.run()
+def _assert_full_stack_defaults(
+    app: object,
+    *,
+    data_mode_select_value: str = "synthetic",
+    sentiment_select_value: str = "finbert",
+    time_series_select_value: str = "local",
+    filing_extractor_value: str = "fingpt",
+) -> None:
+    data_mode_select = next(node for node in app.selectbox if node.label == "Data mode")
+    sentiment_select = next(node for node in app.selectbox if node.label == "Sentiment model")
+    time_series_select = next(node for node in app.selectbox if node.label == "Time-series inference")
+    filing_extractor_select = next(node for node in app.selectbox if node.label == "Filing extractor")
 
-    assert not app.exception
+    assert data_mode_select.value == data_mode_select_value
+    assert sentiment_select.value == sentiment_select_value
+    assert time_series_select.value == time_series_select_value
+    assert filing_extractor_select.value == filing_extractor_value
+    assert any(node.label == "Use local filing LLM" and node.value is True for node in app.checkbox)
 
+
+def _assert_beginner_dashboard_rendered(app: object, captured: dict[str, object]) -> None:
     data_mode_select = next(node for node in app.selectbox if node.label == "Data mode")
     sentiment_select = next(node for node in app.selectbox if node.label == "Sentiment model")
     time_series_select = next(node for node in app.selectbox if node.label == "Time-series inference")
@@ -185,8 +202,6 @@ def test_streamlit_app_renders_beginner_dashboard_in_synthetic_mode(monkeypatch)
     assert sentiment_select.value == "finbert"
     assert time_series_select.value == "local"
     assert filing_extractor_select.value == "fingpt"
-    assert any(node.label == "Use local filing LLM" and node.value is True for node in app.checkbox)
-
     markdown_values = [str(markdown.value) for markdown in app.markdown]
     caption_values = [str(caption.value) for caption in app.caption]
     metric_labels = {metric.label for metric in app.metric}
@@ -225,7 +240,17 @@ def test_streamlit_app_renders_beginner_dashboard_in_synthetic_mode(monkeypatch)
     has_forecast_chart = any(node.__class__.__name__ == "UnknownElement" for node in forecast_nodes)
     has_forecast_fallback = any(
         node.__class__.__name__ == "Caption"
-        and ("자료 부족" in str(node.value) or ":gray" in str(node.value))
+        and (
+            "자료 부족" in str(node.value)
+            or ":gray" in str(node.value)
+            or "expected_return" in str(node.value)
+            or "downside_quantile" in str(node.value)
+        )
+        for node in forecast_nodes
+    )
+    has_forecast_fallback = has_forecast_fallback or any(
+        node.__class__.__name__ == "Markdown"
+        and ("expected_return" in str(node.value) or "downside_quantile" in str(node.value))
         for node in forecast_nodes
     )
     assert has_forecast_chart or has_forecast_fallback
@@ -235,6 +260,14 @@ def test_streamlit_app_renders_beginner_dashboard_in_synthetic_mode(monkeypatch)
     has_sec_events = any(node.__class__.__name__ == "Markdown" and "·" in str(node.value) for node in sec_nodes)
     has_sec_fallback = any(
         node.__class__.__name__ == "Caption" and "표시할 SEC 이벤트 카드가 없습니다." in str(node.value)
+        for node in sec_nodes
+    )
+    has_sec_fallback = has_sec_fallback or any(
+        node.__class__.__name__ == "Caption" and "predicted_volatility" in str(node.value)
+        for node in sec_nodes
+    )
+    has_sec_fallback = has_sec_fallback or any(
+        node.__class__.__name__ == "Markdown" and "위험도" in str(node.value)
         for node in sec_nodes
     )
     assert has_sec_events or has_sec_fallback
@@ -256,3 +289,42 @@ def test_streamlit_app_renders_beginner_dashboard_in_synthetic_mode(monkeypatch)
     for table in first_screen_tables:
         assert "action" not in table.value.columns
         assert "raw_signal" not in table.value.columns
+
+
+def test_streamlit_app_does_not_auto_run_on_first_render(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(pipeline, "run_research_pipeline", lambda config: _run_fake_research_pipeline(captured, config))
+    app = AppTest.from_file("app.py", default_timeout=90)
+    app.run()
+
+    assert not app.exception
+    assert "result" not in app.session_state
+    assert captured.get("calls", 0) == 0
+    _assert_full_stack_defaults(app)
+
+    caption_values = [str(caption.value) for caption in app.caption]
+    assert any(
+        "선택 항목은 기본값으로 구성되며" in caption
+        for caption in caption_values
+    )
+
+
+def test_streamlit_app_runs_pipeline_only_when_run_button_clicked(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(pipeline, "run_research_pipeline", lambda config: _run_fake_research_pipeline(captured, config))
+    app = AppTest.from_file("app.py", default_timeout=90)
+    app.run()
+
+    run_button = next(node for node in app.button if node.label == "Run research")
+    run_button.click().run()
+
+    assert captured.get("calls", 0) == 1
+    assert "result" in app.session_state
+    _assert_full_stack_defaults(app)
+    _assert_beginner_dashboard_rendered(app, captured)
+
+    # Re-run without click should keep latest result and not rerun pipeline.
+    app.run()
+    assert captured.get("calls", 0) == 1

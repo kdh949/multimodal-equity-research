@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+# ruff: noqa: E402, I001
+
+from quant_research.runtime import configure_local_runtime_defaults
+
+configure_local_runtime_defaults()
+
 import pandas as pd
 import streamlit as st
 
@@ -134,11 +140,16 @@ config = PipelineConfig(
     enable_feature_model_ablation=enable_feature_model_ablation,
 )
 
-if run or "result" not in st.session_state:
+if run:
     with st.spinner("Building features, validating models, and running the deterministic signal engine"):
         st.session_state["result"] = run_research_pipeline(config)
 
-result = st.session_state["result"]
+result = st.session_state.get("result")
+if result is None:
+    st.info("기본 모드에서는 계산이 실행되지 않습니다. 먼저 'Run research' 버튼을 눌러서 결과를 생성하세요.")
+    st.caption("선택 항목은 기본값으로 구성되며, 이후 동일 버튼 클릭 시 최신 값으로만 실행됩니다.")
+    st.stop()
+
 metrics = result.backtest.metrics
 dashboard = build_beginner_research_dashboard(result, focus_ticker, config)
 
