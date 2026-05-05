@@ -23,6 +23,13 @@
 
 baseline은 feature importance와 빠른 walk-forward 검증에 사용한다.
 
+macOS Apple Silicon에서는 PyTorch/MLX 같은 로컬 모델 런타임과 LightGBM이 같은
+프로세스에서 OpenMP 런타임을 함께 초기화할 수 있다. 그래서 기본 walk-forward는
+LightGBM fit/predict를 `spawn` subprocess로 격리하고, child 프로세스가 실패하거나
+timeout되면 scikit-learn `HistGradientBoostingRegressor`로 fallback한다. 기본 thread
+수는 1이며 `PipelineConfig(native_tabular_isolation, native_model_timeout_seconds,
+tabular_num_threads)`로 조정한다.
+
 ### Granite TTM
 
 초경량 시계열 모델 adapter다. 빠른 로컬 실험, intraday PoC, daily PoC에 사용한다. 로컬 모드에서는 `sktime.forecasting.ttm.TinyTimeMixerForecaster`로 `ibm-granite/granite-timeseries-ttm-r2`를 불러와 ticker별 다음 기간 수익률을 추론하고 `granite_ttm_expected_return`, `granite_ttm_confidence`를 채운다.
