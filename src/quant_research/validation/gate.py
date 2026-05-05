@@ -41,6 +41,13 @@ class ValidationGateReport:
     evidence: dict[str, Any]
     horizons: list[str]
     required_validation_horizon: str
+    target_horizon: int
+    label_columns: list[str]
+    realized_return_column: str
+    requested_gap_periods: int
+    requested_embargo_periods: int
+    effective_gap_periods: int
+    effective_embargo_periods: int
     embargo_periods: dict[str, int]
     benchmark_results: list[dict[str, Any]]
     ablation_results: list[dict[str, Any]]
@@ -116,21 +123,51 @@ def build_validity_gate_report(
     required_horizon = int(getattr(config, "required_validation_horizon", thresholds.required_validation_horizon))
     benchmark_ticker = str(getattr(config, "benchmark_ticker", "SPY"))
 
-    gap_periods = int(getattr(walk_forward_config, "gap_periods", getattr(config, "gap_periods", 0)))
-    embargo_periods = int(
-        getattr(walk_forward_config, "embargo_periods", getattr(config, "embargo_periods", 0))
+    effective_gap_periods = _first_int(
+        _summary_value(validation_summary, "effective_gap_periods"),
+        getattr(walk_forward_config, "gap_periods", None),
+        getattr(config, "gap_periods", None),
+        0,
+    )
+    effective_embargo_periods = _first_int(
+        _summary_value(validation_summary, "effective_embargo_periods"),
+        getattr(walk_forward_config, "embargo_periods", None),
+        getattr(config, "embargo_periods", None),
+        0,
+    )
+    requested_gap_periods = _first_int(
+        _summary_value(validation_summary, "requested_gap_periods"),
+        getattr(walk_forward_config, "requested_gap_periods", None),
+        getattr(config, "gap_periods", None),
+        effective_gap_periods,
+    )
+    requested_embargo_periods = _first_int(
+        _summary_value(validation_summary, "requested_embargo_periods"),
+        getattr(walk_forward_config, "requested_embargo_periods", None),
+        getattr(config, "embargo_periods", None),
+        effective_embargo_periods,
     )
     min_train_observations = int(getattr(walk_forward_config, "min_train_observations", 0))
+    label_columns = _label_columns(predictions)
+    label_coverage = _label_coverage(predictions, label_columns)
 
     gate_results: dict[str, dict[str, Any]] = {}
     hard_fail_reasons: list[str] = []
     warnings: list[str] = []
     insufficient_data = False
 
-    leakage = _evaluate_leakage(validation_summary, gap_periods, embargo_periods, target_horizon)
+    leakage = _evaluate_leakage(
+        validation_summary,
+        requested_gap_periods,
+        requested_embargo_periods,
+        effective_gap_periods,
+        effective_embargo_periods,
+        target_horizon,
+    )
     gate_results["leakage"] = leakage
     if leakage["status"] == "hard_fail":
         hard_fail_reasons.extend(leakage["reasons"])
+    warnings.extend(leakage.get("warnings", []))
 
     walk_forward = _evaluate_walk_forward(validation_summary, thresholds, min_train_observations)
     gate_results["walk_forward_oos"] = walk_forward
@@ -147,7 +184,13 @@ def build_validity_gate_report(
     elif rank_gate["status"] == "not_evaluable":
         insufficient_data = True
 
-    baseline_results = _benchmark_results(predictions, equity_curve, strategy_metrics, benchmark_ticker)
+    baseline_results = _benchmark_results(
+        predictions,
+        equity_curve,
+        strategy_metrics,
+        benchmark_ticker,
+        target_column,
+    )
     cost_gate = _evaluate_cost_adjusted(baseline_results)
     gate_results["cost_adjusted_performance"] = cost_gate
     if cost_gate["status"] == "warning":
@@ -182,8 +225,15 @@ def build_validity_gate_report(
         "target_column": target_column,
         "target_horizon": target_horizon,
         "required_validation_horizon": required_horizon,
-        "gap_periods": gap_periods,
-        "embargo_periods": embargo_periods,
+        "requested_gap_periods": requested_gap_periods,
+        "requested_embargo_periods": requested_embargo_periods,
+        "effective_gap_periods": effective_gap_periods,
+        "effective_embargo_periods": effective_embargo_periods,
+        "gap_periods": effective_gap_periods,
+        "embargo_periods": effective_embargo_periods,
+        "label_columns": label_columns,
+        "label_coverage": label_coverage,
+        "realized_return_column": target_column,
         "strategy_cagr": _metric(strategy_metrics, "cagr"),
         "strategy_sharpe": _metric(strategy_metrics, "sharpe"),
         "strategy_max_drawdown": _metric(strategy_metrics, "max_drawdown"),
@@ -201,6 +251,7 @@ def build_validity_gate_report(
         "rank_ic": rank_ic,
         "benchmark_ticker": benchmark_ticker,
         "baseline_results": baseline_results,
+        "label_coverage": label_coverage,
         "ablation_required_scenarios": [
             "price_only",
             "text_only",
@@ -223,6 +274,13 @@ def build_validity_gate_report(
         evidence=evidence,
         horizons=list(DEFAULT_HORIZONS),
         required_validation_horizon=required_horizon_text,
+        target_horizon=target_horizon,
+        label_columns=label_columns,
+        realized_return_column=target_column,
+        requested_gap_periods=requested_gap_periods,
+        requested_embargo_periods=requested_embargo_periods,
+        effective_gap_periods=effective_gap_periods,
+        effective_embargo_periods=effective_embargo_periods,
         embargo_periods={horizon: int(horizon.rstrip("d")) for horizon in DEFAULT_HORIZONS},
         benchmark_results=baseline_results,
         ablation_results=list(ablation_summary),
@@ -246,23 +304,42 @@ def write_validity_gate_artifacts(
 
 def _evaluate_leakage(
     validation_summary: pd.DataFrame,
-    gap_periods: int,
-    embargo_periods: int,
+    requested_gap_periods: int,
+    requested_embargo_periods: int,
+    effective_gap_periods: int,
+    effective_embargo_periods: int,
     target_horizon: int,
 ) -> dict[str, Any]:
     reasons: list[str] = []
+    warnings: list[str] = []
     if not validation_summary.empty and {"train_end", "test_start"}.issubset(validation_summary.columns):
         train_end = pd.to_datetime(validation_summary["train_end"], errors="coerce")
         test_start = pd.to_datetime(validation_summary["test_start"], errors="coerce")
         chronology_violations = int((train_end >= test_start).fillna(False).sum())
         if chronology_violations:
             reasons.append(f"train/test chronology violation count={chronology_violations}")
-    if gap_periods < target_horizon:
-        reasons.append(f"gap_periods={gap_periods} is below target horizon={target_horizon}")
-    if embargo_periods < target_horizon:
-        reasons.append(f"embargo_periods={embargo_periods} is below target horizon={target_horizon}")
+    if effective_gap_periods < target_horizon:
+        reasons.append(f"effective_gap_periods={effective_gap_periods} is below target horizon={target_horizon}")
+    if effective_embargo_periods < target_horizon:
+        reasons.append(
+            f"effective_embargo_periods={effective_embargo_periods} is below target horizon={target_horizon}"
+        )
+    if requested_gap_periods < target_horizon:
+        warnings.append(
+            f"requested_gap_periods={requested_gap_periods} was raised to effective_gap_periods={effective_gap_periods}"
+        )
+    if requested_embargo_periods < target_horizon:
+        warnings.append(
+            "requested_embargo_periods="
+            f"{requested_embargo_periods} was raised to effective_embargo_periods={effective_embargo_periods}"
+        )
+    if "label_overlap_violations" in validation_summary:
+        overlap_violations = int(validation_summary["label_overlap_violations"].fillna(0).sum())
+        if overlap_violations:
+            reasons.append(f"purged train labels still overlap test label intervals count={overlap_violations}")
     status = "hard_fail" if reasons else "pass"
-    return {"status": status, "reason": "; ".join(reasons) if reasons else "no leakage guard violation", "reasons": reasons}
+    reason = "; ".join(reasons) if reasons else "no leakage guard violation"
+    return {"status": status, "reason": reason, "reasons": reasons, "warnings": warnings}
 
 
 def _evaluate_walk_forward(
@@ -356,6 +433,7 @@ def _benchmark_results(
     equity_curve: pd.DataFrame,
     strategy_metrics: object,
     benchmark_ticker: str,
+    realized_return_column: str,
 ) -> list[dict[str, Any]]:
     strategy = {
         "name": "strategy",
@@ -364,8 +442,8 @@ def _benchmark_results(
         "max_drawdown": _metric(strategy_metrics, "max_drawdown"),
         "excess_return": 0.0,
     }
-    spy = _spy_baseline_metrics(predictions, equity_curve, benchmark_ticker)
-    equal_weight = _equal_weight_baseline_metrics(predictions)
+    spy = _spy_baseline_metrics(predictions, equity_curve, benchmark_ticker, realized_return_column)
+    equal_weight = _equal_weight_baseline_metrics(predictions, realized_return_column)
     return [
         {
             "name": benchmark_ticker,
@@ -495,20 +573,60 @@ def _spy_baseline_metrics(
     predictions: pd.DataFrame,
     equity_curve: pd.DataFrame,
     benchmark_ticker: str,
+    realized_return_column: str,
 ) -> dict[str, float]:
     if not equity_curve.empty and "benchmark_return" in equity_curve:
         return _return_series_metrics(equity_curve["benchmark_return"])
-    if predictions.empty or "forward_return_1" not in predictions:
+    if predictions.empty or realized_return_column not in predictions:
         return _empty_metrics()
     frame = predictions[predictions["ticker"].astype(str).str.upper() == benchmark_ticker.upper()]
-    return _return_series_metrics(frame["forward_return_1"]) if not frame.empty else _empty_metrics()
+    return _return_series_metrics(frame[realized_return_column]) if not frame.empty else _empty_metrics()
 
 
-def _equal_weight_baseline_metrics(predictions: pd.DataFrame) -> dict[str, float]:
-    if predictions.empty or not {"date", "forward_return_1"}.issubset(predictions.columns):
+def _equal_weight_baseline_metrics(predictions: pd.DataFrame, realized_return_column: str) -> dict[str, float]:
+    if predictions.empty or not {"date", realized_return_column}.issubset(predictions.columns):
         return _empty_metrics()
-    returns = predictions.groupby("date")["forward_return_1"].mean()
+    returns = predictions.groupby("date")[realized_return_column].mean()
     return _return_series_metrics(returns)
+
+
+def _label_columns(frame: pd.DataFrame) -> list[str]:
+    return sorted(column for column in frame.columns if str(column).startswith("forward_return_"))
+
+
+def _label_coverage(frame: pd.DataFrame, label_columns: list[str]) -> dict[str, float]:
+    if frame.empty:
+        return {column: 0.0 for column in label_columns}
+    return {
+        column: float(pd.to_numeric(frame[column], errors="coerce").notna().mean())
+        for column in label_columns
+        if column in frame
+    }
+
+
+def _summary_value(frame: pd.DataFrame, column: str) -> object | None:
+    if frame.empty or column not in frame:
+        return None
+    values = pd.to_numeric(frame[column], errors="coerce").dropna()
+    if values.empty:
+        return None
+    return values.iloc[0]
+
+
+def _first_int(*values: object) -> int:
+    for value in values:
+        if value is None:
+            continue
+        try:
+            if pd.isna(value):
+                continue
+        except (TypeError, ValueError):
+            pass
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return 0
 
 
 def _return_series_metrics(returns: pd.Series) -> dict[str, float]:
