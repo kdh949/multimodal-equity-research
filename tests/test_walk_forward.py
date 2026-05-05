@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
+import quant_research.models.tabular as tabular
 from quant_research.data.market import SyntheticMarketDataProvider
 from quant_research.features.price import build_price_features
 from quant_research.validation.walk_forward import (
@@ -83,3 +85,53 @@ def test_walk_forward_predict_skips_targetless_dates() -> None:
     assert not summary.empty
     assert pd.Timestamp(dates[6]) not in set(predictions["date"].dt.normalize())
     assert summary["labeled_test_observations"].sum() > 0
+
+
+def test_walk_forward_summary_includes_lightgbm_fallback_reason(monkeypatch) -> None:
+    FakeLGBM = type(
+        "LGBMRegressor",
+        (),
+        {
+            "fit": lambda self, X, y, sample_weight=None: self,
+            "predict": lambda self, X: np.zeros(len(X)),
+        },
+    )
+
+    def fake_make_estimator(model_name: str, random_state: int, num_threads: int = 1):
+        del model_name, random_state, num_threads
+        return FakeLGBM()
+
+    def fake_lightgbm_subprocess(**kwargs):
+        del kwargs
+        return {"success": False, "reason": "timed out"}
+
+    monkeypatch.setattr(tabular, "_make_estimator", fake_make_estimator)
+    monkeypatch.setattr(tabular, "_run_lightgbm_subprocess", fake_lightgbm_subprocess)
+
+    dates = pd.date_range("2026-01-01", periods=80, freq="D")
+    frame = pd.DataFrame(
+        {
+            "date": dates,
+            "ticker": ["AAPL"] * len(dates),
+            "volatility_20": [0.02 + (i * 0.0001) for i in range(len(dates))],
+            "return_5": [0.001 * (i % 4 - 2) for i in range(len(dates))],
+            "forward_return_1": [0.001 * (i % 7 - 3) for i in range(len(dates))],
+        }
+    )
+
+    _, summary = walk_forward_predict(
+        frame,
+        WalkForwardConfig(
+            train_periods=35,
+            test_periods=5,
+            gap_periods=1,
+            min_train_observations=35,
+            model_name="lightgbm",
+            native_tabular_isolation=True,
+        ),
+    )
+
+    assert not summary.empty
+    assert "tabular_fallback_reason" in summary.columns
+    assert summary["model_name"].eq("HistGradientBoostingRegressor").all()
+    assert summary["tabular_fallback_reason"].eq("timed out").all()

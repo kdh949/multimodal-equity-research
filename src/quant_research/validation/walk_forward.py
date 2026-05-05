@@ -19,6 +19,9 @@ class WalkForwardConfig:
     winsorization_lower_quantile: float = 0.01
     winsorization_upper_quantile: float = 0.99
     recent_sample_weighting: bool = True
+    native_tabular_isolation: bool = True
+    native_model_timeout_seconds: int = 180
+    tabular_num_threads: int = 1
     embargo_periods: int = 0
 
 
@@ -110,6 +113,9 @@ def walk_forward_predict(
             winsorization_lower_quantile=config.winsorization_lower_quantile,
             winsorization_upper_quantile=config.winsorization_upper_quantile,
             use_recent_weighting=config.recent_sample_weighting,
+            native_tabular_isolation=config.native_tabular_isolation,
+            native_model_timeout_seconds=config.native_model_timeout_seconds,
+            tabular_num_threads=config.tabular_num_threads,
         )
         model.fit(train, target=target)
         pred = model.predict(test)
@@ -145,6 +151,7 @@ def walk_forward_predict(
                 "fold_type": "oos" if fold.fold == final_fold_id else "validation",
                 "model_name": model.actual_model_name,
                 "is_oos": fold.fold == final_fold_id,
+                "tabular_fallback_reason": model.training_metadata.get("tabular_fallback_reason"),
                 "mae": fold_mae,
                 "directional_accuracy": direction,
                 "information_coefficient": ic,

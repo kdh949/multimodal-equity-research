@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+# ruff: noqa: E402, I001
+
 import sys
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from inspect import Parameter, signature
+
+from quant_research.runtime import configure_local_runtime_defaults
+
+configure_local_runtime_defaults()
 
 import pandas as pd
 
@@ -96,6 +102,9 @@ class PipelineConfig:
     sec_frame_period: str = "CY2024Q4I"
     sec_filing_event_cache_path: str | None = str(DEFAULT_FILING_EVENT_CACHE_PATH)
     enable_feature_model_ablation: bool = False
+    native_tabular_isolation: bool = True
+    native_model_timeout_seconds: int = 180
+    tabular_num_threads: int = 1
 
 
 @dataclass(frozen=True)
@@ -163,12 +172,7 @@ def run_research_pipeline(config: PipelineConfig | None = None) -> PipelineResul
 
     predictions, validation_summary = walk_forward_predict(
         features,
-        WalkForwardConfig(
-            train_periods=config.train_periods,
-            test_periods=config.test_periods,
-            gap_periods=config.gap_periods,
-            model_name=config.model_name,
-        ),
+        _walk_forward_config(config),
     )
     predictions = _attach_signal_features(predictions, features)
     backtest = run_long_only_backtest(
@@ -470,12 +474,7 @@ def _run_feature_model_ablation_summary(
     for scenario, variant in variants.items():
         predictions, _summary = walk_forward_predict(
             variant,
-            WalkForwardConfig(
-                train_periods=config.train_periods,
-                test_periods=config.test_periods,
-                gap_periods=config.gap_periods,
-                model_name=config.model_name,
-            ),
+            _walk_forward_config(config),
         )
         predictions = _attach_signal_features(predictions, variant)
         result = run_long_only_backtest(predictions, _backtest_config(config))
@@ -504,4 +503,16 @@ def _backtest_config(
         max_symbol_weight=config.max_symbol_weight,
         portfolio_volatility_limit=config.portfolio_volatility_limit,
         max_drawdown_stop=config.max_drawdown_stop,
+    )
+
+
+def _walk_forward_config(config: PipelineConfig) -> WalkForwardConfig:
+    return WalkForwardConfig(
+        train_periods=config.train_periods,
+        test_periods=config.test_periods,
+        gap_periods=config.gap_periods,
+        model_name=config.model_name,
+        native_tabular_isolation=config.native_tabular_isolation,
+        native_model_timeout_seconds=config.native_model_timeout_seconds,
+        tabular_num_threads=config.tabular_num_threads,
     )

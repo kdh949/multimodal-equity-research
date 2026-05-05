@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import requests
 
+import quant_research.models.tabular as tabular
 import quant_research.pipeline as pipeline
 from quant_research.features.text import KeywordSentimentAnalyzer
 from quant_research.models.ollama import OllamaAgent
@@ -226,6 +227,83 @@ def test_tabular_model_falls_back_when_lightgbm_native_library_fails(monkeypatch
     model = TabularReturnModel(model_name="lightgbm", random_state=7).fit(train)
 
     assert model.actual_model_name == "HistGradientBoostingRegressor"
+
+
+def test_tabular_model_falls_back_when_lightgbm_subprocess_fails(monkeypatch) -> None:
+    FakeLGBM = type(
+        "LGBMRegressor",
+        (),
+        {
+            "fit": lambda self, X, y, sample_weight=None: self,
+            "predict": lambda self, X: np.zeros(len(X)),
+        },
+    )
+
+    def fake_make_estimator(model_name: str, random_state: int, num_threads: int = 1):
+        del model_name, random_state, num_threads
+        return FakeLGBM()
+
+    def fake_lightgbm_subprocess(**kwargs):
+        del kwargs
+        return {"success": False, "reason": "child exception: simulated"}
+
+    monkeypatch.setattr(tabular, "_make_estimator", fake_make_estimator)
+    monkeypatch.setattr(tabular, "_run_lightgbm_subprocess", fake_lightgbm_subprocess)
+
+    train = pd.DataFrame(
+        {
+            "date": pd.date_range("2026-01-01", periods=40, freq="D"),
+            "ticker": ["AAPL"] * 40,
+            "volatility_20": [0.02] * 40,
+            "return_5": [0.001] * 40,
+            "return_20": [0.002] * 40,
+            "forward_return_1": [0.001] * 40,
+        }
+    )
+
+    model = TabularReturnModel(model_name="lightgbm", random_state=7).fit(train)
+
+    assert model.actual_model_name == "HistGradientBoostingRegressor"
+    assert model.training_metadata["tabular_fallback_reason"] == "child exception: simulated"
+    assert model.training_metadata["fit_reason"] == "lightgbm_fallback"
+
+
+def test_tabular_model_falls_back_when_lightgbm_subprocess_times_out(monkeypatch) -> None:
+    FakeLGBM = type(
+        "LGBMRegressor",
+        (),
+        {
+            "fit": lambda self, X, y, sample_weight=None: self,
+            "predict": lambda self, X: np.zeros(len(X)),
+        },
+    )
+
+    def fake_make_estimator(model_name: str, random_state: int, num_threads: int = 1):
+        del model_name, random_state, num_threads
+        return FakeLGBM()
+
+    def fake_lightgbm_subprocess(**kwargs):
+        del kwargs
+        return {"success": False, "reason": "timeout"}
+
+    monkeypatch.setattr(tabular, "_make_estimator", fake_make_estimator)
+    monkeypatch.setattr(tabular, "_run_lightgbm_subprocess", fake_lightgbm_subprocess)
+
+    train = pd.DataFrame(
+        {
+            "date": pd.date_range("2026-01-01", periods=40, freq="D"),
+            "ticker": ["AAPL"] * 40,
+            "volatility_20": [0.02] * 40,
+            "return_5": [0.001] * 40,
+            "return_20": [0.002] * 40,
+            "forward_return_1": [0.001] * 40,
+        }
+    )
+
+    model = TabularReturnModel(model_name="lightgbm", random_state=7, native_model_timeout_seconds=5).fit(train)
+
+    assert model.actual_model_name == "HistGradientBoostingRegressor"
+    assert model.training_metadata["tabular_fallback_reason"] == "timeout"
 
 
 def test_tabular_model_returns_calibration_metadata_and_raw_predictions() -> None:

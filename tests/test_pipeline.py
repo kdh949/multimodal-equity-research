@@ -141,3 +141,25 @@ def test_fingpt_runtime_settings_are_passed_only_for_fingpt_extractor(monkeypatc
         unquantized_transformers == config.fingpt_allow_unquantized_transformers
         or unquantized_fingpt == config.fingpt_allow_unquantized_transformers
     )
+
+
+def test_walk_forward_config_carries_native_runtime_guards() -> None:
+    config = PipelineConfig(
+        train_periods=45,
+        test_periods=9,
+        gap_periods=2,
+        model_name="lightgbm",
+        native_tabular_isolation=False,
+        native_model_timeout_seconds=11,
+        tabular_num_threads=3,
+    )
+
+    walk_config = pipeline._walk_forward_config(config)
+
+    assert walk_config.train_periods == 45
+    assert walk_config.test_periods == 9
+    assert walk_config.gap_periods == 2
+    assert walk_config.model_name == "lightgbm"
+    assert walk_config.native_tabular_isolation is False
+    assert walk_config.native_model_timeout_seconds == 11
+    assert walk_config.tabular_num_threads == 3
