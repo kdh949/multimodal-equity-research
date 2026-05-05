@@ -12,6 +12,8 @@ from pathlib import Path
 
 # macOS: PyTorch MPS 초기화 후 subprocess.Popen(fork)시 ObjC runtime 충돌 방지
 os.environ.setdefault("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES")
+# macOS: PyTorch(libtorch) + LightGBM(libomp) OpenMP 중복 로드 허용 (같은 프로세스에서 두 라이브러리가 충돌 방지)
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import pandas as pd
 

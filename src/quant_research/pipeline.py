@@ -72,7 +72,7 @@ class PipelineConfig:
     cost_bps: float = 5.0
     slippage_bps: float = 2.0
     sentiment_model: str = "finbert"
-    time_series_inference_mode: str = "proxy"
+    time_series_inference_mode: str = "local"
     time_series_target_column: str = "return_1"
     time_series_min_context: int = 64
     max_time_series_inference_windows: int | None = None
@@ -81,8 +81,8 @@ class PipelineConfig:
     granite_ttm_revision: str | None = None
     local_model_device_map: str = "auto"
     local_model_offload_folder: str | None = "artifacts/model_offload"
-    filing_extractor_model: str = "rules"
-    enable_local_filing_llm: bool = False
+    filing_extractor_model: str = "fingpt"
+    enable_local_filing_llm: bool = True
     finma_model_id: str = "ChanceFocus/finma-7b-nlp"
     fingpt_model_id: str = "FinGPT/fingpt-mt_llama3-8b_lora"
     fingpt_base_model_id: str | None = "meta-llama/Meta-Llama-3-8B"
@@ -117,22 +117,25 @@ def run_research_pipeline(config: PipelineConfig | None = None) -> PipelineResul
 
     market_data = _load_market_data(config, tickers)
     price_features = build_price_features(market_data)
-    price_features = Chronos2Adapter(
+    chronos_adapter = Chronos2Adapter(
         model_id=config.chronos_model_id,
         device_map=config.local_model_device_map,
-    ).add_forecasts(
+        local_files_only=True,
+    )
+    price_features = chronos_adapter.add_forecasts(
         price_features,
-        mode=config.time_series_inference_mode,
+        mode=_resolve_timeseries_mode(config.time_series_inference_mode, chronos_adapter),
         target_column=config.time_series_target_column,
         min_context=config.time_series_min_context,
         max_inference_windows=config.max_time_series_inference_windows,
     )
-    price_features = GraniteTTMAdapter(
+    granite_adapter = GraniteTTMAdapter(
         model_id=config.granite_ttm_model_id,
         revision=config.granite_ttm_revision,
-    ).add_forecasts(
+    )
+    price_features = granite_adapter.add_forecasts(
         price_features,
-        mode=config.time_series_inference_mode,
+        mode=_resolve_timeseries_mode(config.time_series_inference_mode, granite_adapter),
         target_column=config.time_series_target_column,
         min_context=config.time_series_min_context,
         max_inference_windows=config.max_time_series_inference_windows,
@@ -142,14 +145,15 @@ def run_research_pipeline(config: PipelineConfig | None = None) -> PipelineResul
     news_features = build_news_features(news_items, _sentiment_analyzer(config.sentiment_model, config.local_model_device_map))
 
     filings_by_ticker, facts_by_ticker = _load_sec_data(config, tickers)
+    filing_extractor = _filing_extractor(config)
     sec_features = build_sec_features(
         filings_by_ticker,
         facts_by_ticker,
         price_features,
-        filing_extractor=_filing_extractor(config),
+        filing_extractor=filing_extractor,
         filing_cache_path=(
             config.sec_filing_event_cache_path
-            if config.enable_local_filing_llm
+            if config.enable_local_filing_llm and bool(getattr(filing_extractor, "use_local_model", False))
             else None
         ),
     )
@@ -221,7 +225,11 @@ def _load_sec_data(config: PipelineConfig, tickers: list[str]) -> tuple[dict[str
             if cik is None:
                 continue
             try:
-                filings_by_ticker[ticker] = client.recent_filings(cik, {"8-K", "10-Q", "10-K", "4"})
+                filings_by_ticker[ticker] = client.recent_filings(
+                    cik,
+                    {"8-K", "10-Q", "10-K", "4"},
+                    include_document_text=True,
+                )
                 facts_frame = extract_companyfacts_frame(client.get_companyfacts(cik))
                 concept_frame = extract_companyconcept_frame(
                     client.get_companyconcept(cik, "us-gaap", "NetIncomeLoss"),
@@ -238,7 +246,13 @@ def _load_sec_data(config: PipelineConfig, tickers: list[str]) -> tuple[dict[str
             return filings_by_ticker, facts_by_ticker
 
     provider = SyntheticSecProvider()
-    filings = {ticker: provider.recent_filings(CIK_BY_TICKER.get(ticker, "0")) for ticker in tickers}
+    filings = {
+        ticker: provider.recent_filings(
+            CIK_BY_TICKER.get(ticker, "0"),
+            include_document_text=True,
+        )
+        for ticker in tickers
+    }
     facts = {ticker: provider.companyfacts_frame(CIK_BY_TICKER.get(ticker, "0")) for ticker in tickers}
     return filings, facts
 
@@ -303,19 +317,46 @@ def _sentiment_analyzer(model_name: str, device_map: str = "auto"):
     if model_name.lower() == "finbert":
         # device_map="cpu" when MLX is active to avoid PyTorch MPS + Metal conflict
         device = "cpu" if device_map == "cpu" else None
-        return FinBERTSentimentAnalyzer(device=device)
+        analyzer = FinBERTSentimentAnalyzer(device=device, local_files_only=True)
+        try:
+            if analyzer.available():
+                return analyzer
+        except Exception:
+            return KeywordSentimentAnalyzer()
+        return KeywordSentimentAnalyzer()
     return KeywordSentimentAnalyzer()
+
+
+def _resolve_timeseries_mode(requested_mode: str, adapter: object) -> str:
+    if requested_mode != "local":
+        return requested_mode
+    if hasattr(adapter, "available"):
+        try:
+            if adapter.available():
+                return requested_mode
+        except Exception:
+            return "proxy"
+        return "proxy"
+    return "proxy"
 
 
 def _filing_extractor(config: PipelineConfig):
     model_name = config.filing_extractor_model.lower()
     if model_name == "finma":
-        return FilingEventExtractor(
+        extractor = FilingEventExtractor(
             model_id=config.finma_model_id,
             use_local_model=config.enable_local_filing_llm,
+            local_files_only=True,
             device_map=config.local_model_device_map,
             offload_folder=config.local_model_offload_folder,
         )
+        try:
+            is_available = getattr(extractor, "available", None)
+            if is_available is None:
+                return extractor
+            return extractor if is_available() else FilingEventExtractor(use_local_model=False)
+        except Exception:
+            return FilingEventExtractor(use_local_model=False)
     if model_name == "fingpt":
         # Keep compatibility with both the current and planned FinGPT extractor constructor
         # fields by only passing arguments that are accepted.
@@ -340,14 +381,22 @@ def _filing_extractor(config: PipelineConfig):
                 for key, value in runtime_args.items()
                 if key in accepted_keys
             }
-        return FinGPTEventExtractor(
+        extractor = FinGPTEventExtractor(
             model_id=config.fingpt_model_id,
             use_local_model=config.enable_local_filing_llm,
             device_map=config.local_model_device_map,
+            local_files_only=True,
             base_model_id=config.fingpt_base_model_id,
             offload_folder=config.local_model_offload_folder,
             **runtime_kwargs,
         )
+        try:
+            is_available = getattr(extractor, "available", None)
+            if is_available is None:
+                return extractor
+            return extractor if is_available() else FilingEventExtractor(use_local_model=False)
+        except Exception:
+            return FilingEventExtractor(use_local_model=False)
     return FilingEventExtractor(use_local_model=False)
 
 

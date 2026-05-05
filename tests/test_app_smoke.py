@@ -1,7 +1,134 @@
 from __future__ import annotations
 
+import pandas as pd
 from streamlit.testing.v1 import AppTest
 
+import quant_research.pipeline as pipeline
+from quant_research.backtest.engine import BacktestResult
+from quant_research.backtest.metrics import PerformanceMetrics
+from quant_research.pipeline import PipelineResult
+
+
+def _build_stub_result() -> PipelineResult:
+    dates = pd.date_range("2026-01-01", periods=6, freq="D")
+    focus_ticker = "SPY"
+    market_data = pd.DataFrame(
+        {
+            "date": dates.repeat(2),
+            "ticker": [focus_ticker, focus_ticker] * len(dates),
+            "close": [440, 441] * len(dates),
+            "forward_return_1": [0.005, 0.004] * len(dates),
+        }
+    )
+    news_features = pd.DataFrame(
+        {
+            "date": dates,
+            "ticker": [focus_ticker] * len(dates),
+            "news_article_count": [1] * len(dates),
+            "news_sentiment_mean": [0.02] * len(dates),
+            "news_negative_ratio": [0.0] * len(dates),
+            "news_source_count": [1] * len(dates),
+            "news_source_diversity": [1.0] * len(dates),
+            "news_event_count": [0] * len(dates),
+            "news_top_event": ["none"] * len(dates),
+            "text_risk_score": [0.0] * len(dates),
+            "news_confidence_mean": [0.6] * len(dates),
+            "news_token_count_mean": [12.0] * len(dates),
+            "news_text_length": [40.0] * len(dates),
+            "news_full_text_available_ratio": [1.0] * len(dates),
+            "news_recency_decay": [0.0] * len(dates),
+            "news_staleness_days": [0.0] * len(dates),
+            "news_coverage_5d": [3.0] * len(dates),
+            "news_coverage_20d": [12.0] * len(dates),
+        }
+    )
+    sec_features = pd.DataFrame(
+        {
+            "date": dates,
+            "ticker": [focus_ticker] * len(dates),
+            "sec_event_tag": ["none"] * len(dates),
+            "sec_risk_flag": [0.0] * len(dates),
+            "sec_risk_flag_20d": [0.0] * len(dates),
+            "sec_event_confidence": [0.0] * len(dates),
+            "sec_summary_ref": [""] * len(dates),
+        }
+    )
+    predictions = pd.DataFrame(
+        {
+            "date": dates,
+            "ticker": [focus_ticker] * len(dates),
+            "action": ["HOLD"] * len(dates),
+            "signal_score": [0.0] * len(dates),
+            "expected_return": [0.01] * len(dates),
+            "predicted_volatility": [0.02] * len(dates),
+            "downside_quantile": [-0.015] * len(dates),
+            "upside_quantile": [0.035] * len(dates),
+            "text_risk_score": [0.0] * len(dates),
+            "sec_risk_flag": [0.0] * len(dates),
+            "sec_risk_flag_20d": [0.0] * len(dates),
+            "text_risk_flag": [0.0] * len(dates),
+            "sec_event_confidence": [0.0] * len(dates),
+        }
+    )
+    signals = predictions.copy()
+    features = market_data.copy()
+    validation_summary = pd.DataFrame({"is_oos": [True], "directional_accuracy": [0.62]})
+    ablation_summary = [
+        {
+            "scenario": "all_features",
+            "kind": "signal",
+            "cagr": 0.01,
+            "sharpe": 0.3,
+            "max_drawdown": -0.01,
+            "excess_return": 0.008,
+        }
+    ]
+    backtest = BacktestResult(
+        equity_curve=pd.DataFrame(
+            {
+                "date": dates,
+                "equity": [1.0, 1.01, 1.02, 1.03, 1.04, 1.05],
+                "benchmark_equity": [1.0, 1.0, 1.01, 1.01, 1.01, 1.02],
+                "portfolio_return": [0.01, 0.01, 0.01, 0.01, 0.01, 0.01],
+                "benchmark_return": [0.0, 0.001, 0.0, 0.0, 0.0, 0.001],
+                "turnover": [0.0] * len(dates),
+                "exposure": [0.2] * len(dates),
+                "gross_return": [0.01] * len(dates),
+                "return_date": dates,
+            }
+        ),
+        weights=pd.DataFrame(
+            {
+                "signal_date": pd.to_datetime(dates),
+                "effective_date": pd.to_datetime(dates),
+                "ticker": [focus_ticker] * len(dates),
+                "weight": [0.0] * len(dates),
+            }
+        ),
+        signals=signals,
+        metrics=PerformanceMetrics(
+            cagr=0.03,
+            annualized_volatility=0.12,
+            sharpe=0.9,
+            max_drawdown=-0.02,
+            hit_rate=0.58,
+            turnover=0.0,
+            exposure=0.2,
+            benchmark_cagr=0.02,
+            excess_return=0.01,
+        ),
+    )
+    return PipelineResult(
+        market_data=market_data,
+        news_features=news_features,
+        sec_features=sec_features,
+        features=features,
+        predictions=predictions,
+        signals=signals,
+        validation_summary=validation_summary,
+        ablation_summary=ablation_summary,
+        backtest=backtest,
+    )
 
 def _child_nodes(node: object) -> list[object]:
     children = getattr(node, "children", None)
@@ -30,7 +157,14 @@ def _has_evidence(captions: list[str], keys: tuple[str, ...]) -> bool:
     return any(any(key in line for key in keys) for line in captions)
 
 
-def test_streamlit_app_renders_beginner_dashboard_in_synthetic_mode() -> None:
+def test_streamlit_app_renders_beginner_dashboard_in_synthetic_mode(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_research_pipeline(config: pipeline.PipelineConfig) -> PipelineResult:
+        captured["config"] = config
+        return _build_stub_result()
+
+    monkeypatch.setattr(pipeline, "run_research_pipeline", fake_run_research_pipeline)
     app = AppTest.from_file("app.py", default_timeout=90)
     app.run()
 
@@ -38,11 +172,20 @@ def test_streamlit_app_renders_beginner_dashboard_in_synthetic_mode() -> None:
 
     data_mode_select = next(node for node in app.selectbox if node.label == "Data mode")
     sentiment_select = next(node for node in app.selectbox if node.label == "Sentiment model")
+    time_series_select = next(node for node in app.selectbox if node.label == "Time-series inference")
     filing_extractor_select = next(node for node in app.selectbox if node.label == "Filing extractor")
+    config = captured["config"]
+    assert isinstance(config, pipeline.PipelineConfig)
+    assert config.sentiment_model == "finbert"
+    assert config.filing_extractor_model == "fingpt"
+    assert config.enable_local_filing_llm is True
+    assert config.time_series_inference_mode == "local"
 
     assert data_mode_select.value == "synthetic"
-    assert sentiment_select.value == "keyword"
-    assert filing_extractor_select.value == "rules"
+    assert sentiment_select.value == "finbert"
+    assert time_series_select.value == "local"
+    assert filing_extractor_select.value == "fingpt"
+    assert any(node.label == "Use local filing LLM" and node.value is True for node in app.checkbox)
 
     markdown_values = [str(markdown.value) for markdown in app.markdown]
     caption_values = [str(caption.value) for caption in app.caption]

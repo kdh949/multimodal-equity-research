@@ -45,34 +45,56 @@ EVENT_KEYWORDS = {
     "buyback": "capital_return",
 }
 
+RECENCY_ALPHA_DEFAULT = 0.15
+RECENCY_WINDOWS = (5, 20)
+NEWS_LAG_PERIODS_DEFAULT = 1
+
 
 @dataclass
 class KeywordSentimentAnalyzer:
     def score(self, text: str) -> dict[str, float | str | bool]:
-        tokens = set(re.findall(r"[a-zA-Z]+", text.lower()))
-        pos = len(tokens.intersection(POSITIVE_WORDS))
-        neg = len(tokens.intersection(NEGATIVE_WORDS))
+        tokens = re.findall(r"[a-zA-Z]+", text.lower())
+        if not tokens:
+            return {
+                "sentiment_score": 0.0,
+                "negative_flag": False,
+                "label": "neutral",
+                "confidence": 0.45,
+                "event_tag": "",
+                "risk_flag": False,
+                "token_count": 0.0,
+            }
+
+        unique_tokens = set(tokens)
+        pos = len(unique_tokens.intersection(POSITIVE_WORDS))
+        neg = len(unique_tokens.intersection(NEGATIVE_WORDS))
         raw = pos - neg
-        sentiment = math.tanh(raw / 3)
-        label = "positive" if sentiment > 0.15 else "negative" if sentiment < -0.15 else "neutral"
-        confidence = min(1.0, 0.45 + abs(sentiment))
-        event_tags = sorted({tag for keyword, tag in EVENT_KEYWORDS.items() if keyword in tokens})
+        token_count = float(len(tokens))
+        sentiment = math.tanh((raw / token_count) * 3.5)
+        confidence = min(1.0, 0.45 + abs(sentiment) + min(0.4, token_count / 30.0))
+        label = "positive" if sentiment > 0.12 else "negative" if sentiment < -0.12 else "neutral"
+        event_tags = sorted({tag for keyword, tag in EVENT_KEYWORDS.items() if keyword in unique_tokens})
         return {
             "sentiment_score": sentiment,
             "negative_flag": sentiment < -0.15,
             "label": label,
             "confidence": confidence,
             "event_tag": ",".join(event_tags),
-            "risk_flag": bool(tokens.intersection(NEGATIVE_WORDS)),
+            "risk_flag": bool(unique_tokens.intersection(NEGATIVE_WORDS)),
+            "token_count": token_count,
         }
 
 
-def build_news_features(news_items: list[NewsItem], analyzer: KeywordSentimentAnalyzer | None = None) -> pd.DataFrame:
+def build_news_features(
+    news_items: list[NewsItem],
+    analyzer: KeywordSentimentAnalyzer | None = None,
+) -> pd.DataFrame:
     analyzer = analyzer or KeywordSentimentAnalyzer()
     rows: list[dict[str, object]] = []
     for item in news_items:
-        text = f"{item.title}. {item.summary}".strip()
-        scored = analyzer.score(text)
+        full_text = _full_text(item)
+        scoring_text = full_text or f"{item.title}. {item.summary}".strip()
+        scored = analyzer.score(scoring_text)
         rows.append(
             {
                 "date": pd.Timestamp(item.published_at).normalize(),
@@ -83,8 +105,12 @@ def build_news_features(news_items: list[NewsItem], analyzer: KeywordSentimentAn
                 "event_tag": str(scored["event_tag"]),
                 "risk_flag": bool(scored["risk_flag"]),
                 "confidence": float(scored["confidence"]),
+                "news_token_count": _score_token_count(scored, scoring_text),
+                "news_text_length": float(len(scoring_text)),
+                "news_full_text_available": 1.0 if bool(full_text) else 0.0,
             }
         )
+
     if not rows:
         return _empty_news_features()
 
@@ -92,24 +118,40 @@ def build_news_features(news_items: list[NewsItem], analyzer: KeywordSentimentAn
     aggregations = []
     for (date, ticker), group in frame.groupby(["date", "ticker"]):
         event_counter = Counter(tag for tags in group["event_tag"] for tag in str(tags).split(",") if tag)
+        confidence_sum = float(group["confidence"].sum())
+        if confidence_sum > 0:
+            weighted_sentiment = float((group["sentiment_score"] * group["confidence"]).sum() / confidence_sum)
+        else:
+            weighted_sentiment = float(group["sentiment_score"].mean())
+        article_count = len(group)
         aggregations.append(
             {
                 "date": date,
                 "ticker": ticker,
-                "news_article_count": len(group),
-                "news_sentiment_mean": group["sentiment_score"].mean(),
+                "news_article_count": article_count,
+                "news_sentiment_mean": weighted_sentiment,
                 "news_negative_ratio": group["negative_flag"].mean(),
                 "news_source_count": group["source"].nunique(),
+                "news_source_diversity": group["source"].nunique() / float(article_count),
                 "news_event_count": sum(event_counter.values()),
                 "news_top_event": event_counter.most_common(1)[0][0] if event_counter else "none",
                 "text_risk_score": group["risk_flag"].mean(),
                 "news_confidence_mean": group["confidence"].mean(),
+                "news_token_count_mean": group["news_token_count"].mean(),
+                "news_text_length": group["news_text_length"].mean(),
+                "news_full_text_available_ratio": group["news_full_text_available"].mean(),
             }
         )
     return pd.DataFrame(aggregations).sort_values(["date", "ticker"]).reset_index(drop=True)
 
 
-def expand_news_features_to_calendar(news_features: pd.DataFrame, calendar: pd.DataFrame, decay: float = 0.85) -> pd.DataFrame:
+def expand_news_features_to_calendar(
+    news_features: pd.DataFrame,
+    calendar: pd.DataFrame,
+    decay: float = 0.85,
+    coverage_windows: tuple[int, ...] = RECENCY_WINDOWS,
+    news_lag_periods: int = NEWS_LAG_PERIODS_DEFAULT,
+) -> pd.DataFrame:
     if news_features.empty:
         expanded = calendar[["date", "ticker"]].drop_duplicates().copy()
         for column in _empty_news_features().columns:
@@ -124,15 +166,32 @@ def expand_news_features_to_calendar(news_features: pd.DataFrame, calendar: pd.D
         "news_sentiment_mean",
         "news_negative_ratio",
         "news_source_count",
+        "news_source_diversity",
         "news_event_count",
         "text_risk_score",
         "news_confidence_mean",
+        "news_token_count_mean",
+        "news_text_length",
+        "news_full_text_available_ratio",
     ]
+    merged["date"] = pd.to_datetime(merged["date"]).dt.normalize()
+    merged = merged.sort_values(["ticker", "date"]).reset_index(drop=True)
     merged[numeric_cols] = merged[numeric_cols].fillna(0.0)
     merged["news_top_event"] = merged["news_top_event"].fillna("none")
-    merged["news_recency_decay"] = merged.groupby("ticker")["news_article_count"].transform(
-        lambda series: series.ewm(alpha=1 - decay, adjust=False).mean()
+    merged = _add_news_recency_features(
+        merged,
+        decay=decay,
+        coverage_windows=coverage_windows,
     )
+    merged = _apply_news_lag(merged, news_lag_periods=news_lag_periods)
+    numeric_fill = [
+        column
+        for column in merged.columns
+        if (column.startswith("news_") or column.startswith("text_"))
+        and pd.api.types.is_numeric_dtype(merged[column])
+    ]
+    merged[numeric_fill] = merged[numeric_fill].fillna(0.0)
+    merged["news_top_event"] = merged["news_top_event"].fillna("none")
     return merged
 
 
@@ -145,9 +204,96 @@ def _empty_news_features() -> pd.DataFrame:
             "news_sentiment_mean",
             "news_negative_ratio",
             "news_source_count",
+            "news_source_diversity",
             "news_event_count",
             "news_top_event",
             "text_risk_score",
             "news_confidence_mean",
+            "news_token_count_mean",
+            "news_text_length",
+            "news_full_text_available_ratio",
+            "news_recency_decay",
+            "news_staleness_days",
+            "news_coverage_5d",
+            "news_coverage_20d",
         ]
     )
+
+
+def _full_text(item: NewsItem) -> str:
+    if item.full_text:
+        return item.full_text
+    if item.body_text:
+        return item.body_text
+    return item.content
+
+
+def _add_news_recency_features(
+    frame: pd.DataFrame,
+    decay: float = 0.85,
+    coverage_windows: tuple[int, ...] = RECENCY_WINDOWS,
+) -> pd.DataFrame:
+    frame = frame.sort_values(["ticker", "date"]).copy()
+    decay = max(0.0, min(float(decay), 0.99))
+    alpha = max(1.0 - decay, RECENCY_ALPHA_DEFAULT)
+    grouped = frame.groupby("ticker")
+    frame["news_recency_decay"] = grouped["news_article_count"].transform(
+        lambda series: series.ewm(alpha=alpha, adjust=False).mean()
+    )
+    frame["news_staleness_days"] = grouped.apply(_staleness_days).reset_index(level=0, drop=True)
+    for window in coverage_windows:
+        frame[f"news_coverage_{window}d"] = grouped["news_article_count"].transform(
+            lambda series, lookback=window: series.rolling(lookback, min_periods=1).sum()
+        )
+    return frame
+
+
+def _staleness_days(group: pd.DataFrame) -> pd.Series:
+    ordered = group.sort_values("date").copy()
+    ordered["date"] = pd.to_datetime(ordered["date"])
+    stale = pd.Series(index=ordered.index, dtype=float)
+    last_seen: pd.Timestamp | float | None = None
+    for index, row in ordered.iterrows():
+        if row["news_article_count"] > 0:
+            last_seen = row["date"]
+        if last_seen is None:
+            stale.at[index] = float("nan")
+        else:
+            stale.at[index] = (row["date"] - last_seen).days
+    if stale.isna().all():
+        stale.fillna(999.0, inplace=True)
+    else:
+        fill_value = float(stale.max())
+        stale.fillna(fill_value + 1, inplace=True)
+    return stale.reindex(group.index)
+
+
+def _apply_news_lag(frame: pd.DataFrame, news_lag_periods: int) -> pd.DataFrame:
+    if news_lag_periods <= 0:
+        return frame
+    frame = frame.sort_values(["ticker", "date"]).copy()
+    grouped = frame.groupby("ticker")
+    lag_columns_numeric = [
+        column
+        for column in frame.columns
+        if (column.startswith("news_") or column.startswith("text_"))
+        and pd.api.types.is_numeric_dtype(frame[column])
+    ]
+    for column in lag_columns_numeric:
+        frame[column] = grouped[column].shift(news_lag_periods)
+    for column in ["news_top_event"]:
+        if column in frame:
+            frame[column] = grouped[column].shift(news_lag_periods)
+    return frame
+
+
+def _score_token_count(scored: dict[str, float | str | bool], text: str) -> float:
+    raw = scored.get("token_count")
+    if isinstance(raw, bool):
+        return 0.0
+    try:
+        if raw is not None:
+            return float(raw)
+    except (TypeError, ValueError):
+        pass
+    return float(len(re.findall(r"[a-zA-Z]+", text.lower())))

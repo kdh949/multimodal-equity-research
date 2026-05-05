@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 import requests
 
+import quant_research.pipeline as pipeline
+from quant_research.features.text import KeywordSentimentAnalyzer
 from quant_research.models.ollama import OllamaAgent
 from quant_research.models.tabular import TabularReturnModel
 from quant_research.models.text import (
@@ -16,6 +18,8 @@ from quant_research.models.text import (
     FinGPTEventExtractor,
 )
 from quant_research.models.timeseries import Chronos2Adapter, GraniteTTMAdapter
+
+PipelineConfig = pipeline.PipelineConfig
 
 
 def test_chronos2_proxy_forecast_columns_are_added() -> None:
@@ -224,6 +228,27 @@ def test_tabular_model_falls_back_when_lightgbm_native_library_fails(monkeypatch
     assert model.actual_model_name == "HistGradientBoostingRegressor"
 
 
+def test_tabular_model_returns_calibration_metadata_and_raw_predictions() -> None:
+    train = pd.DataFrame(
+        {
+            "date": pd.date_range("2026-01-01", periods=80, freq="D"),
+            "ticker": ["AAPL"] * 80,
+            "volatility_20": [0.01 + (0.0001 * i if i < 40 else 40) for i in range(80)],
+            "return_5": [0.001 * (i % 7 - 3) for i in range(80)],
+            "return_20": [0.002 * (i % 5 - 2) for i in range(80)],
+            "forward_return_1": [0.001 * (i % 3 - 1) for i in range(80)],
+        }
+    )
+    model = TabularReturnModel(model_name="auto", recent_weight_power=1.2, random_state=11).fit(train)
+    preds = model.predict(train.tail(10))
+
+    assert {"raw_expected_return", "expected_return", "model_calibration_scale", "model_calibration_bias"}.issubset(
+        set(preds.columns)
+    )
+    assert {"winsorized_feature_count", "calibration_scale", "calibration_bias"}.issubset(model.training_metadata)
+    assert float(model.training_metadata["winsorized_feature_count"]) >= 0
+
+
 def test_finbert_uses_no_network_fallback_contract(monkeypatch) -> None:
     fake_transformers = types.ModuleType("transformers")
 
@@ -236,7 +261,14 @@ def test_finbert_uses_no_network_fallback_contract(monkeypatch) -> None:
     analyzer = FinBERTSentimentAnalyzer()
     result = analyzer.score("Company announced stronger guidance and improving demand.")
 
-    assert set(result) == {"sentiment_score", "negative_flag", "label", "confidence", "event_tag", "risk_flag"}
+    assert set(result) == {
+        "sentiment_score",
+        "negative_flag",
+        "label",
+        "confidence",
+        "event_tag",
+        "risk_flag",
+    }
     assert isinstance(result["sentiment_score"], float)
     assert isinstance(result["confidence"], float)
     assert isinstance(result["negative_flag"], bool)
@@ -358,3 +390,131 @@ def test_ollama_agent_falls_back_when_server_unreachable(monkeypatch) -> None:
 
     response = OllamaAgent().explain("Summarize risk in this sample text.")
     assert response == "Ollama is unavailable; deterministic metrics and signals were generated locally."
+
+
+def test_sentiment_analyzer_prefers_finbert_when_available(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeFinBERT:
+        def __init__(self, *args, **kwargs) -> None:
+            captured["args"] = kwargs
+
+        def available(self) -> bool:
+            return True
+
+        def score(self, text: str) -> dict[str, float | str | bool]:
+            return {
+                "sentiment_score": 0.42,
+                "negative_flag": False,
+                "label": "positive",
+                "confidence": 0.88,
+                "event_tag": "none",
+                "risk_flag": False,
+            }
+
+    monkeypatch.setattr(pipeline, "FinBERTSentimentAnalyzer", FakeFinBERT)
+    analyzer = pipeline._sentiment_analyzer("finbert")
+
+    assert isinstance(analyzer, FakeFinBERT)
+    assert captured["args"]["local_files_only"] is True
+
+
+def test_sentiment_analyzer_falls_back_to_keyword_when_finbert_unavailable(monkeypatch) -> None:
+    class UnavailableFinBERT:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def available(self) -> bool:
+            return False
+
+        def score(self, text: str) -> dict[str, float | str | bool]:
+            return {
+                "sentiment_score": 0.0,
+                "negative_flag": False,
+                "label": "neutral",
+                "confidence": 0.0,
+                "event_tag": "",
+                "risk_flag": False,
+            }
+
+    monkeypatch.setattr(pipeline, "FinBERTSentimentAnalyzer", UnavailableFinBERT)
+
+    analyzer = pipeline._sentiment_analyzer("finbert")
+
+    assert isinstance(analyzer, KeywordSentimentAnalyzer)
+
+
+def test_filing_extractor_prefers_fingpt_adapter_when_available(monkeypatch) -> None:
+    class FakeFinGPT:
+        def __init__(self, *args, **kwargs) -> None:
+            self.kwargs = kwargs
+
+        def available(self) -> bool:
+            return True
+
+        def extract(self, text: str) -> dict[str, object]:
+            return {
+                "event_tag": "none",
+                "risk_flag": False,
+                "confidence": 0.8,
+                "summary_ref": text[:20],
+            }
+
+    monkeypatch.setattr(pipeline, "FinGPTEventExtractor", FakeFinGPT)
+    extractor = pipeline._filing_extractor(
+        PipelineConfig(
+            filing_extractor_model="fingpt",
+            enable_local_filing_llm=True,
+            fingpt_runtime="llama-cpp",
+            fingpt_quantized_model_path="artifacts/model_cache/fingpt-test.gguf",
+        )
+    )
+
+    assert isinstance(extractor, FakeFinGPT)
+    assert extractor.kwargs["runtime"] == "llama-cpp"
+
+
+def test_filing_extractor_falls_back_to_rules_when_fingpt_unavailable(monkeypatch) -> None:
+    class UnavailableFinGPT:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def available(self) -> bool:
+            return False
+
+        def extract(self, text: str) -> dict[str, object]:
+            return {
+                "event_tag": "none",
+                "risk_flag": False,
+                "confidence": 0.5,
+                "summary_ref": "fallback",
+            }
+
+    monkeypatch.setattr(pipeline, "FinGPTEventExtractor", UnavailableFinGPT)
+    extractor = pipeline._filing_extractor(
+        PipelineConfig(
+            filing_extractor_model="fingpt",
+            enable_local_filing_llm=True,
+            fingpt_runtime="transformers",
+            fingpt_base_model_id=None,
+        )
+    )
+
+    assert isinstance(extractor, FilingEventExtractor)
+    assert extractor.use_local_model is False
+
+
+def test_resolve_timeseries_mode_forces_proxy_when_adapter_unavailable() -> None:
+    class OfflineAdapter:
+        def available(self) -> bool:
+            return False
+
+    assert pipeline._resolve_timeseries_mode("local", OfflineAdapter()) == "proxy"
+
+
+def test_resolve_timeseries_mode_keeps_local_when_adapter_available() -> None:
+    class OnlineAdapter:
+        def available(self) -> bool:
+            return True
+
+    assert pipeline._resolve_timeseries_mode("local", OnlineAdapter()) == "local"
