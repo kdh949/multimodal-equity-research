@@ -5,20 +5,17 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
-import os
 import sys
 from datetime import date, timedelta
 from pathlib import Path
 
-# macOS: PyTorch MPS 초기화 후 subprocess.Popen(fork)시 ObjC runtime 충돌 방지
-os.environ.setdefault("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES")
-# macOS: PyTorch(libtorch) + LightGBM(libomp) OpenMP 중복 로드 허용 (같은 프로세스에서 두 라이브러리가 충돌 방지)
-os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
-
-import pandas as pd
-
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+from quant_research.runtime import configure_local_runtime_defaults  # noqa: E402
+
+configure_local_runtime_defaults()
+
+import pandas as pd
 
 from quant_research.config import DEFAULT_TICKERS  # noqa: E402
 from quant_research.pipeline import PipelineConfig, PipelineResult, run_research_pipeline  # noqa: E402

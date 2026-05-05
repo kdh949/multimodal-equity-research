@@ -1,16 +1,22 @@
 """FinGPT (Llama-3-8B + LoRA) → MLX 4-bit 양자화 변환 스크립트."""
 from __future__ import annotations
 
+# ruff: noqa: E402, I001
+
 import shutil
 import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+from quant_research.runtime import configure_local_runtime_defaults
+
+configure_local_runtime_defaults()
 
 import torch
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
 
 BASE_PATH = str(ROOT / "artifacts/huggingface/hub/models--meta-llama--Meta-Llama-3-8B/snapshots/8cde5ca8380496c9a6cc7ef3a8b46a0372a1d920")
 LORA_PATH = str(ROOT / "artifacts/huggingface/hub/models--FinGPT--fingpt-mt_llama3-8b_lora/snapshots/5b5850574ec13e4ce7c102e24f763205992711b7")
