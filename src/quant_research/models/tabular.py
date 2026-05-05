@@ -461,7 +461,11 @@ def infer_feature_columns(frame: pd.DataFrame, target: str = "forward_return_1")
     excluded = set(IDENTIFIER_COLUMNS)
     excluded.add(target)
     numeric_columns = frame.select_dtypes(include=[np.number]).columns
-    return [column for column in numeric_columns if column not in excluded]
+    return [
+        column
+        for column in numeric_columns
+        if column not in excluded and not str(column).startswith("forward_return_")
+    ]
 
 
 def _make_estimator(model_name: str, random_state: int, num_threads: int = 1) -> BaseEstimator:

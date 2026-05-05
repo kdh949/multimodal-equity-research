@@ -6,6 +6,7 @@ import pandas as pd
 import quant_research.models.tabular as tabular
 from quant_research.data.market import SyntheticMarketDataProvider
 from quant_research.features.price import build_price_features
+from quant_research.models.tabular import infer_feature_columns
 from quant_research.validation.walk_forward import (
     WalkForwardConfig,
     walk_forward_predict,
@@ -135,3 +136,18 @@ def test_walk_forward_summary_includes_lightgbm_fallback_reason(monkeypatch) -> 
     assert "tabular_fallback_reason" in summary.columns
     assert summary["model_name"].eq("HistGradientBoostingRegressor").all()
     assert summary["tabular_fallback_reason"].eq("timed out").all()
+
+
+def test_infer_feature_columns_excludes_all_forward_return_targets() -> None:
+    frame = pd.DataFrame(
+        {
+            "date": pd.date_range("2026-01-01", periods=3),
+            "ticker": ["AAPL", "AAPL", "AAPL"],
+            "return_1": [0.01, 0.02, 0.03],
+            "forward_return_1": [0.01, 0.01, 0.01],
+            "forward_return_5": [0.02, 0.02, 0.02],
+            "forward_return_20": [0.03, 0.03, 0.03],
+        }
+    )
+
+    assert infer_feature_columns(frame, target="forward_return_5") == ["return_1"]

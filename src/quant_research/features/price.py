@@ -18,7 +18,10 @@ def build_price_features(price_data: pd.DataFrame) -> pd.DataFrame:
     frame["return_1"] = groups["adj_close"].pct_change()
     frame["return_5"] = groups["adj_close"].pct_change(5)
     frame["return_20"] = groups["adj_close"].pct_change(20)
-    frame["forward_return_1"] = groups["adj_close"].pct_change().groupby(frame["ticker"]).shift(-1)
+    for horizon in (1, 5, 20):
+        frame[f"forward_return_{horizon}"] = (
+            groups["adj_close"].pct_change(horizon).groupby(frame["ticker"]).shift(-horizon)
+        )
     frame["high_low_range"] = (frame["high"] - frame["low"]) / frame["close"].replace(0, np.nan)
     frame["dollar_volume"] = frame["adj_close"] * frame["volume"]
 
