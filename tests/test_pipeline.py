@@ -12,9 +12,11 @@ def test_synthetic_pipeline_runs_end_to_end() -> None:
         PipelineConfig(
             tickers=["SPY", "AAPL", "MSFT"],
             data_mode="synthetic",
-            train_periods=60,
-            test_periods=15,
+            train_periods=120,
+            test_periods=40,
             top_n=2,
+            model_name="hist_gradient",
+            native_tabular_isolation=False,
             enable_feature_model_ablation=True,
         )
     )
@@ -34,12 +36,19 @@ def test_synthetic_pipeline_runs_end_to_end() -> None:
         "no_sec_risk",
         "no_costs",
         "full_model_features",
+        "price_only",
+        "text_only",
+        "sec_only",
         "no_chronos_features",
         "no_granite_features",
+        "no_model_proxy",
         "tabular_without_ts_proxies",
     } == {
         row["scenario"] for row in result.ablation_summary
     }
+    assert result.validity_report is not None
+    assert result.validity_report.required_validation_horizon == "5d"
+    assert result.validity_report.system_validity_status in {"pass", "hard_fail", "not_evaluable"}
 
 
 def test_synthetic_pipeline_features_include_recency_coverage_news_columns() -> None:
@@ -50,6 +59,8 @@ def test_synthetic_pipeline_features_include_recency_coverage_news_columns() -> 
             train_periods=60,
             test_periods=15,
             top_n=2,
+            model_name="hist_gradient",
+            native_tabular_isolation=False,
         )
     )
 
@@ -148,6 +159,8 @@ def test_walk_forward_config_carries_native_runtime_guards() -> None:
         train_periods=45,
         test_periods=9,
         gap_periods=2,
+        embargo_periods=3,
+        prediction_target_column="forward_return_1",
         model_name="lightgbm",
         native_tabular_isolation=False,
         native_model_timeout_seconds=11,
@@ -159,6 +172,7 @@ def test_walk_forward_config_carries_native_runtime_guards() -> None:
     assert walk_config.train_periods == 45
     assert walk_config.test_periods == 9
     assert walk_config.gap_periods == 2
+    assert walk_config.embargo_periods == 3
     assert walk_config.model_name == "lightgbm"
     assert walk_config.native_tabular_isolation is False
     assert walk_config.native_model_timeout_seconds == 11

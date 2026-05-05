@@ -35,6 +35,7 @@ from quant_research.models.text import (
     FinGPTEventExtractor,
 )
 from quant_research.models.timeseries import Chronos2Adapter, GraniteTTMAdapter
+from quant_research.validation.gate import ValidationGateReport, build_validity_gate_report
 from quant_research.validation.walk_forward import WalkForwardConfig, walk_forward_predict
 
 CIK_BY_TICKER = {
@@ -73,8 +74,11 @@ class PipelineConfig:
     interval: str = "1d"
     train_periods: int = 90
     test_periods: int = 20
-    gap_periods: int = 1
+    gap_periods: int = 5
+    embargo_periods: int = 5
     model_name: str = "lightgbm"
+    prediction_target_column: str = "forward_return_5"
+    required_validation_horizon: int = 5
     top_n: int = 3
     cost_bps: float = 5.0
     slippage_bps: float = 2.0
@@ -119,6 +123,7 @@ class PipelineResult:
     validation_summary: pd.DataFrame
     ablation_summary: list[dict[str, object]]
     backtest: BacktestResult
+    validity_report: ValidationGateReport | None = None
 
 
 def run_research_pipeline(config: PipelineConfig | None = None) -> PipelineResult:
@@ -169,11 +174,13 @@ def run_research_pipeline(config: PipelineConfig | None = None) -> PipelineResul
     )
 
     features = fuse_features(price_features, news_features, sec_features)
-    features = features.dropna(subset=["forward_return_1"]).reset_index(drop=True)
+    features = features.dropna(subset=[config.prediction_target_column]).reset_index(drop=True)
 
+    walk_config = _walk_forward_config(config)
     predictions, validation_summary = walk_forward_predict(
         features,
-        _walk_forward_config(config),
+        walk_config,
+        target=config.prediction_target_column,
     )
     predictions = _attach_signal_features(predictions, features)
     backtest = run_long_only_backtest(
@@ -183,6 +190,15 @@ def run_research_pipeline(config: PipelineConfig | None = None) -> PipelineResul
     ablation_summary = _run_ablation_summary(predictions, config)
     if config.enable_feature_model_ablation:
         ablation_summary.extend(_run_feature_model_ablation_summary(features, config))
+    validity_report = build_validity_gate_report(
+        predictions,
+        validation_summary,
+        backtest.equity_curve,
+        backtest.metrics,
+        ablation_summary,
+        config=config,
+        walk_forward_config=walk_config,
+    )
 
     return PipelineResult(
         market_data=market_data,
@@ -192,6 +208,7 @@ def run_research_pipeline(config: PipelineConfig | None = None) -> PipelineResul
         predictions=predictions,
         signals=backtest.signals,
         validation_summary=validation_summary,
+        validity_report=validity_report,
         ablation_summary=ablation_summary,
         backtest=backtest,
     )
@@ -319,7 +336,11 @@ def _attach_signal_features(predictions: pd.DataFrame, features: pd.DataFrame) -
     if features.empty or not {"date", "ticker"}.issubset(features.columns):
         enriched = predictions.copy()
     else:
-        merge_columns = [column for column in features.columns if column != "forward_return_1"]
+        merge_columns = [
+            column
+            for column in features.columns
+            if column in {"date", "ticker"} or column not in predictions.columns
+        ]
         enriched = predictions.merge(
             features[merge_columns],
             on=["date", "ticker"],
@@ -493,14 +514,26 @@ def _run_feature_model_ablation_summary(
     config: PipelineConfig,
 ) -> list[dict[str, object]]:
     scenarios: list[dict[str, object]] = []
+    base_columns = _base_feature_columns(features)
     variants = {
         "full_model_features": features,
+        "price_only": _feature_subset(features, base_columns, _price_feature_columns(features)),
+        "text_only": _feature_subset(features, base_columns, _text_feature_columns(features)),
+        "sec_only": _feature_subset(features, base_columns, _sec_feature_columns(features)),
         "no_chronos_features": features.drop(
             columns=[column for column in features.columns if column.startswith("chronos_")],
             errors="ignore",
         ),
         "no_granite_features": features.drop(
             columns=[column for column in features.columns if column.startswith("granite_ttm_")],
+            errors="ignore",
+        ),
+        "no_model_proxy": features.drop(
+            columns=[
+                column
+                for column in features.columns
+                if column.startswith("chronos_") or column.startswith("granite_ttm_")
+            ],
             errors="ignore",
         ),
         "tabular_without_ts_proxies": features.drop(
@@ -516,6 +549,7 @@ def _run_feature_model_ablation_summary(
         predictions, _summary = walk_forward_predict(
             variant,
             _walk_forward_config(config),
+            target=config.prediction_target_column,
         )
         predictions = _attach_signal_features(predictions, variant)
         result = run_long_only_backtest(predictions, _backtest_config(config))
@@ -548,12 +582,65 @@ def _backtest_config(
 
 
 def _walk_forward_config(config: PipelineConfig) -> WalkForwardConfig:
+    horizon = _target_horizon(config.prediction_target_column) or config.required_validation_horizon
     return WalkForwardConfig(
         train_periods=config.train_periods,
         test_periods=config.test_periods,
-        gap_periods=config.gap_periods,
+        gap_periods=max(config.gap_periods, horizon),
         model_name=config.model_name,
         native_tabular_isolation=config.native_tabular_isolation,
         native_model_timeout_seconds=config.native_model_timeout_seconds,
         tabular_num_threads=config.tabular_num_threads,
+        embargo_periods=max(config.embargo_periods, horizon),
     )
+
+
+def _target_horizon(target_column: str) -> int | None:
+    prefix = "forward_return_"
+    if not target_column.startswith(prefix):
+        return None
+    try:
+        return int(target_column.removeprefix(prefix))
+    except ValueError:
+        return None
+
+
+def _base_feature_columns(features: pd.DataFrame) -> list[str]:
+    return [
+        column
+        for column in features.columns
+        if column in {"date", "ticker"} or str(column).startswith("forward_return_")
+    ]
+
+
+def _price_feature_columns(features: pd.DataFrame) -> list[str]:
+    prefixes = (
+        "return_",
+        "volatility_",
+        "volume_",
+        "ma_ratio_",
+        "rsi_",
+        "high_low_",
+        "dollar_volume",
+        "realized_volatility",
+        "liquidity_score",
+    )
+    return [column for column in features.columns if str(column).startswith(prefixes)]
+
+
+def _text_feature_columns(features: pd.DataFrame) -> list[str]:
+    prefixes = ("news_", "sentiment_", "text_")
+    return [column for column in features.columns if str(column).startswith(prefixes)]
+
+
+def _sec_feature_columns(features: pd.DataFrame) -> list[str]:
+    return [column for column in features.columns if str(column).startswith("sec_")]
+
+
+def _feature_subset(
+    features: pd.DataFrame,
+    base_columns: list[str],
+    selected_columns: list[str],
+) -> pd.DataFrame:
+    columns = list(dict.fromkeys([*base_columns, *selected_columns]))
+    return features[[column for column in columns if column in features.columns]].copy()

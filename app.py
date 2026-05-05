@@ -12,6 +12,7 @@ import streamlit as st
 from quant_research.config import DEFAULT_TICKERS
 from quant_research.dashboard import build_beginner_research_dashboard
 from quant_research.dashboard.streamlit import render_beginner_overview
+from quant_research.dashboard.validity import render_validity_gate
 from quant_research.pipeline import PipelineConfig, run_research_pipeline
 
 
@@ -36,6 +37,14 @@ def main() -> None:
         top_n = st.slider("Top N", min_value=1, max_value=8, value=3)
         train_periods = st.slider("Train periods", min_value=30, max_value=300, value=90, step=10)
         test_periods = st.slider("Test periods", min_value=5, max_value=60, value=20, step=5)
+        prediction_target_column = st.selectbox(
+            "Prediction target",
+            ["forward_return_5", "forward_return_1", "forward_return_20"],
+            index=0,
+        )
+        target_horizon = int(prediction_target_column.removeprefix("forward_return_"))
+        gap_periods = st.slider("Gap periods", min_value=1, max_value=60, value=target_horizon, step=1)
+        embargo_periods = st.slider("Embargo periods", min_value=1, max_value=60, value=target_horizon, step=1)
         cost_bps = st.slider("Cost bps", min_value=0.0, max_value=50.0, value=5.0, step=0.5)
         slippage_bps = st.slider("Slippage bps", min_value=0.0, max_value=50.0, value=2.0, step=0.5)
         sentiment_model = st.selectbox("Sentiment model", ["keyword", "finbert"], index=1)
@@ -116,6 +125,9 @@ def main() -> None:
         data_mode=data_mode,
         train_periods=train_periods,
         test_periods=test_periods,
+        gap_periods=gap_periods,
+        embargo_periods=embargo_periods,
+        prediction_target_column=prediction_target_column,
         top_n=top_n,
         cost_bps=cost_bps,
         slippage_bps=slippage_bps,
@@ -204,6 +216,8 @@ def main() -> None:
         st.dataframe(result.features.tail(200), width="stretch", hide_index=True)
 
     with tabs[3]:
+        if result.validity_report is not None:
+            render_validity_gate(result.validity_report)
         st.subheader("Walk-Forward Summary")
         st.dataframe(result.validation_summary, width="stretch", hide_index=True)
         if "is_oos" in result.validation_summary.columns:
