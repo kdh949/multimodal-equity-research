@@ -111,6 +111,38 @@ class YFinanceMarketDataProvider:
         return pd.concat(frames, ignore_index=True).sort_values(["date", "ticker"]).reset_index(drop=True)
 
 
+@dataclass
+class LocalMarketDataProvider:
+    """Reads pre-downloaded OHLCV data from a Parquet file (no network calls)."""
+
+    data_path: str = "data/raw/market_history.parquet"
+
+    def get_history(
+        self,
+        tickers: list[str],
+        start: str | date | None = None,
+        end: str | date | None = None,
+        interval: str = "1d",
+    ) -> pd.DataFrame:
+        from pathlib import Path
+
+        path = Path(self.data_path)
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Local market data not found at '{path}'. "
+                "Run: uv run python scripts/download_backtest_data.py"
+            )
+        frame = pd.read_parquet(path)
+        frame["date"] = pd.to_datetime(frame["date"]).dt.normalize()
+        if tickers:
+            frame = frame[frame["ticker"].isin(tickers)]
+        if start:
+            frame = frame[frame["date"] >= pd.Timestamp(start).normalize()]
+        if end:
+            frame = frame[frame["date"] <= pd.Timestamp(end).normalize()]
+        return frame.sort_values(["date", "ticker"]).reset_index(drop=True)
+
+
 def _normalize_yfinance_frame(frame: pd.DataFrame, ticker: str) -> pd.DataFrame:
     renamed = {column: str(column).lower().replace(" ", "_") for column in frame.columns}
     normalized = frame.rename(columns=renamed).reset_index()

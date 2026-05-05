@@ -155,6 +155,55 @@ class GDELTNewsProvider:
         return items
 
 
+@dataclass
+class LocalNewsProvider:
+    """Reads pre-downloaded news items from a JSONL file (no network calls)."""
+
+    data_path: str = "data/raw/news_items.jsonl"
+
+    def get_news(self, tickers: list[str], start: str | date, end: str | date) -> list[NewsItem]:
+        from pathlib import Path
+
+        path = Path(self.data_path)
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Local news data not found at '{path}'. "
+                "Run: uv run python scripts/download_backtest_data.py"
+            )
+        start_ts = pd.Timestamp(start).normalize()
+        end_ts = pd.Timestamp(end).normalize()
+        ticker_set = set(tickers) if tickers else None
+        items: list[NewsItem] = []
+        with open(path) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if ticker_set and record.get("ticker") not in ticker_set:
+                    continue
+                published = _parse_news_timestamp(record.get("published_at", ""))
+                if pd.isna(published) or published < start_ts or published > end_ts:
+                    continue
+                items.append(
+                    NewsItem(
+                        ticker=record.get("ticker", ""),
+                        published_at=published,
+                        title=record.get("title", ""),
+                        source=record.get("source", ""),
+                        url=record.get("url", ""),
+                        summary=record.get("summary", ""),
+                        content=record.get("content", ""),
+                        full_text=record.get("full_text", ""),
+                        body_text=record.get("body_text", ""),
+                    )
+                )
+        return items
+
+
 def _parse_news_timestamp(value: object) -> pd.Timestamp:
     if isinstance(value, int | float):
         return pd.to_datetime(value, unit="s").tz_localize(None).normalize()

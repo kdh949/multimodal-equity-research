@@ -15,8 +15,8 @@ import pandas as pd
 
 from quant_research.backtest.engine import BacktestConfig, BacktestResult, run_long_only_backtest
 from quant_research.config import DEFAULT_TICKERS
-from quant_research.data.market import SyntheticMarketDataProvider, YFinanceMarketDataProvider
-from quant_research.data.news import GDELTNewsProvider, SyntheticNewsProvider, YFinanceNewsProvider
+from quant_research.data.market import LocalMarketDataProvider, SyntheticMarketDataProvider, YFinanceMarketDataProvider
+from quant_research.data.news import GDELTNewsProvider, LocalNewsProvider, SyntheticNewsProvider, YFinanceNewsProvider
 from quant_research.data.sec import (
     SecEdgarClient,
     SyntheticSecProvider,
@@ -66,7 +66,8 @@ def _default_fingpt_quantized_model_path() -> str:
 @dataclass(frozen=True)
 class PipelineConfig:
     tickers: list[str] = field(default_factory=lambda: list(DEFAULT_TICKERS))
-    data_mode: str = "synthetic"
+    data_mode: str = "synthetic"  # "synthetic" | "live" | "local"
+    local_data_dir: str = "data/raw"  # used when data_mode="local"
     start: date = field(default_factory=lambda: date.today() - timedelta(days=365 * 2))
     end: date = field(default_factory=date.today)
     interval: str = "1d"
@@ -197,6 +198,11 @@ def run_research_pipeline(config: PipelineConfig | None = None) -> PipelineResul
 
 
 def _load_market_data(config: PipelineConfig, tickers: list[str]) -> pd.DataFrame:
+    if config.data_mode == "local":
+        import os
+        path = os.path.join(config.local_data_dir, "market_history.parquet")
+        provider = LocalMarketDataProvider(data_path=path)
+        return provider.get_history(tickers, config.start, config.end, config.interval)
     if config.data_mode == "live":
         provider = YFinanceMarketDataProvider()
         live = provider.get_history(tickers, config.start, config.end, config.interval)
@@ -206,6 +212,10 @@ def _load_market_data(config: PipelineConfig, tickers: list[str]) -> pd.DataFram
 
 
 def _load_news_items(config: PipelineConfig, tickers: list[str]):
+    if config.data_mode == "local":
+        import os
+        path = os.path.join(config.local_data_dir, "news_items.jsonl")
+        return LocalNewsProvider(data_path=path).get_news(tickers, config.start, config.end)
     if config.data_mode == "live":
         items = []
         for provider in (YFinanceNewsProvider(), GDELTNewsProvider()):
@@ -219,6 +229,37 @@ def _load_news_items(config: PipelineConfig, tickers: list[str]):
 
 
 def _load_sec_data(config: PipelineConfig, tickers: list[str]) -> tuple[dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
+    if config.data_mode == "local":
+        import os
+        sec_cache_dir = os.path.join(config.local_data_dir, "sec")
+        client = SecEdgarClient(cache_dir=sec_cache_dir)  # type: ignore[arg-type]
+        filings_by_ticker: dict[str, pd.DataFrame] = {}
+        facts_by_ticker: dict[str, pd.DataFrame] = {}
+        frame_assets = _load_sec_frame_assets(client, config)
+        for ticker in tickers:
+            cik = CIK_BY_TICKER.get(ticker)
+            if cik is None:
+                continue
+            try:
+                filings_by_ticker[ticker] = client.recent_filings(
+                    cik,
+                    {"8-K", "10-Q", "10-K", "4"},
+                    include_document_text=True,
+                )
+                facts_frame = extract_companyfacts_frame(client.get_companyfacts(cik))
+                concept_frame = extract_companyconcept_frame(
+                    client.get_companyconcept(cik, "us-gaap", "NetIncomeLoss"),
+                    "net_income",
+                )
+                merged_facts = merge_fact_frames(facts_frame, concept_frame)
+                cik10 = "".join(char for char in str(cik) if char.isdigit()).zfill(10)
+                if cik10 in frame_assets:
+                    merged_facts["sec_frame_assets"] = frame_assets[cik10]
+                facts_by_ticker[ticker] = merged_facts
+            except Exception:
+                continue
+        if filings_by_ticker or facts_by_ticker:
+            return filings_by_ticker, facts_by_ticker
     if config.data_mode == "live":
         client = SecEdgarClient()
         filings_by_ticker: dict[str, pd.DataFrame] = {}
