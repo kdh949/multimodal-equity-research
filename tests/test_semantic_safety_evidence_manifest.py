@@ -202,9 +202,9 @@ def test_manifest_records_validation_non_impact_and_warning_policy() -> None:
 
     assert manifest["validation_impact"]["behavior_change_expected"] is False
     warning = warning_policy["warnings"][0]
-    assert warning["warning_class"] == "FutureWarning"
-    assert warning["source_path"] == ".venv/lib/python3.12/site-packages/sklearn/pipeline.py:61"
+    assert warning["warning_class"] == "UserWarning"
+    assert warning["source_path"] == ".venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2749"
     assert warning_policy["triggering_command"] == "python3 -m pytest"
-    assert warning["accepted_count"] == 2
+    assert warning["accepted_count"] == 12
     assert warning_policy["drift_trigger"]
     assert warning_policy["warning_reduction_changed_semantics"] is False

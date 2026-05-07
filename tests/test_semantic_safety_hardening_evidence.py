@@ -494,7 +494,7 @@ def test_warning_baseline_schema_and_positive_observation_match() -> None:
     observed = [
         {
             "warning_class": warning["warning_class"],
-            "message": "This Pipeline instance is not fitted yet. Call 'fit' with appropriate arguments before using other methods such as transform, predict, etc.",
+            "message": "X does not have valid feature names, but LGBMRegressor was fitted with feature names",
             "source_path": warning["source_path"],
             "triggering_command": baseline["triggering_command"],
             "count": warning["accepted_count"],
@@ -516,7 +516,7 @@ def test_warning_baseline_schema_and_positive_observation_match() -> None:
 @pytest.mark.parametrize(
     "mutation",
     [
-        {"warning_class": "UserWarning"},
+        {"warning_class": "FutureWarning"},
         {"message": "different warning message"},
         {"source_path": "src/quant_research/validation/walk_forward.py:1"},
         {"triggering_command": "python3 -m pytest tests/test_walk_forward.py"},
@@ -530,7 +530,7 @@ def test_warning_baseline_fails_on_class_message_path_command_or_count_drift(
     warning = baseline["warnings"][0]
     observed = {
         "warning_class": warning["warning_class"],
-        "message": "This Pipeline instance is not fitted yet. Call 'fit' with appropriate arguments before using other methods such as transform, predict, etc.",
+        "message": "X does not have valid feature names, but LGBMRegressor was fitted with feature names",
         "source_path": warning["source_path"],
         "triggering_command": baseline["triggering_command"],
         "count": warning["accepted_count"],

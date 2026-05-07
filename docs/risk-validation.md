@@ -245,7 +245,7 @@ snapshots.
 | Forbidden policy-language allowlist | `uv --cache-dir .uv-cache run pytest tests/test_policy_language_guardrails.py` | Tests pass and broker/order terms remain confined to docs, tests, and fixtures as explicit prohibition or audit evidence. | Review this document's allowlist tables plus `tests/test_policy_language_guardrails.py`; evidence is stored as committed docs/tests only. |
 | Deterministic signal-only final labels | `uv --cache-dir .uv-cache run pytest tests/test_signal_engine.py tests/test_backtest_risk.py tests/test_architecture_guards.py` | Tests pass and final `BUY`, `SELL`, and `HOLD` labels are emitted only after deterministic scoring, gate, cost/slippage, and risk checks. | Review `docs/final-action-label-inventory.md`, `src/quant_research/signals/engine.py`, and the named tests; no model output artifact is treated as a final label source. |
 | Report-only metric isolation | `uv --cache-dir .uv-cache run pytest tests/test_validity_gate_metric_formulas.py tests/test_report_generation.py tests/test_report_only_execution_isolation.py` | Tests pass and `top_decile_20d_excess_return` remains a report-only out-of-sample diagnostic with no gate status, threshold, or final-signal effect. | Review report metric tests and static fixtures under `tests/fixtures/report_generation`; generated report artifacts are not committed. |
-| Optional warning baseline | `uv --cache-dir .uv-cache run pytest -q` | Current integrated baseline is `795 passed`; optional warning metadata remains documented as non-semantic dependency-surface evidence. | Review this section and `tests/test_warning_baseline_documentation.py`; keep only concise warning metadata in docs/tests. |
+| Optional warning baseline | `uv --cache-dir .uv-cache run pytest -q` | Current integrated baseline is `832 passed, 12 warnings`; optional warning metadata remains documented as non-semantic dependency-surface evidence. | Review this section and `tests/test_warning_baseline_documentation.py`; keep only concise warning metadata in docs/tests. |
 
 For ad hoc text review, run:
 
@@ -335,20 +335,21 @@ Reproducible command:
 uv --cache-dir .uv-cache run pytest -q
 ```
 
-Observed baseline on 2026-05-07 after fixing pandas SEC feature call sites and
-adding audit-evidence reproduction documentation:
+Observed baseline on 2026-05-07 after merging all active validation branches,
+fixing pandas SEC feature call sites, and adding audit-evidence reproduction
+documentation:
 
-- `795 passed`
-- No warning summary was printed by the verified full-suite command in this
-  environment.
+- `832 passed`
+- `12 warnings`
 - Affected production path: none
-- Affected tests: `tests/test_walk_forward.py`
+- Affected tests: `tests/test_model_adapters.py` (2 warnings),
+  `tests/test_report_generation.py` (10 warnings)
 
 Documented warning families:
 
 | Source | Warning class | Count | Invariant |
 | --- | --- | ---: | --- |
-| `.venv/lib/python3.12/site-packages/sklearn/pipeline.py:61` | sklearn `FutureWarning` for methods on an unfitted `Pipeline` | 2 | `tests/test_walk_forward.py::test_walk_forward_preprocessing_is_fit_on_fold_train_only` inspects fold-local fitting behavior; warning is test evidence only. |
+| `.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2749` | sklearn `UserWarning` for LightGBM prediction inputs without fitted feature names | 12 | Optional LightGBM-backed tests exercise prediction paths; warning is dependency-surface evidence only. |
 
 Pandas compatibility fixes applied in `src/quant_research/features/sec.py`:
 
@@ -391,13 +392,13 @@ Warnings reduced:
 | Warning family | Affected paths | Reduction reason | Semantic impact |
 | --- | --- | --- | --- |
 | pandas object-dtype fill/forward-fill deprecations in SEC feature generation | `src/quant_research/features/sec.py`, `tests/test_sec_features.py` | SEC numeric and timestamp columns are normalized before fill and rolling operations. | None: missing SEC numeric values remain neutral, SEC timestamps remain point-in-time, and no feature/date ordering rule changes. |
-| downstream validation-suite warning count | pytest full suite | Removing the pandas deprecations reduces the expected baseline to the documented sklearn `FutureWarning` rows. | None: the reduction removes compatibility noise only; it does not re-score signals, re-gate candidates, or alter report metrics. |
+| downstream validation-suite warning count | pytest full suite | Removing the pandas deprecations leaves the expected baseline at the documented sklearn LightGBM `UserWarning` rows. | None: the reduction removes compatibility noise only; it does not re-score signals, re-gate candidates, or alter report metrics. |
 
 Warnings intentionally tracked:
 
 | Warning family | Affected paths | Why it remains tracked | Removal trigger |
 | --- | --- | --- | --- |
-| sklearn `FutureWarning` for methods on an unfitted `Pipeline` | dependency source `.venv/lib/python3.12/site-packages/sklearn/pipeline.py:61`; observed through `tests/test_walk_forward.py::test_walk_forward_preprocessing_is_fit_on_fold_train_only` | The test intentionally inspects fold-local preprocessing behavior. The warning is dependency-surface evidence, not a validation status. | Remove this baseline only when sklearn or the test helper no longer emits the warning while preserving fold-local fit assertions. |
+| sklearn `UserWarning` for LightGBM prediction inputs without fitted feature names | dependency source `.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2749`; observed through `tests/test_model_adapters.py` and `tests/test_report_generation.py` | Optional LightGBM-backed tests exercise prediction paths where sklearn emits feature-name metadata warnings. The warning is dependency-surface evidence, not a validation status. | Remove this baseline only when sklearn/LightGBM or the test helpers no longer emit the warning while preserving prediction-output assertions. |
 
 Why semantics are unchanged:
 

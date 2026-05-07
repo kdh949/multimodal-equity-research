@@ -251,7 +251,7 @@ def test_risk_validation_docs_define_audit_evidence_reproduction() -> None:
         "no new generated artifacts are written",
         "evidence is stored as committed docs/tests only",
         "generated report artifacts are not committed",
-        "Current integrated baseline is `795 passed`",
+        "Current integrated baseline is `832 passed, 12 warnings`",
         "Expected result: no output.",
         "Validation impact: none.",
         "must not change validation behavior, signal semantics, model",

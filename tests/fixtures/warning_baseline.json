@@ -3,11 +3,11 @@
   "triggering_command": "python3 -m pytest",
   "warnings": [
     {
-      "warning_class": "FutureWarning",
-      "message_regex": ".*Pipeline instance is not fitted yet.*",
-      "source_path": ".venv/lib/python3.12/site-packages/sklearn/pipeline.py:61",
-      "accepted_count": 2,
-      "rationale": "Dependency-surface warning from fold-local preprocessing evidence; no signal, validation, model, backtest, or report semantics are changed.",
+      "warning_class": "UserWarning",
+      "message_regex": ".*X does not have valid feature names.*LGBMRegressor was fitted with feature names.*",
+      "source_path": ".venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2749",
+      "accepted_count": 12,
+      "rationale": "Optional LightGBM dependency-surface warning from test prediction paths; no signal, validation, model, backtest, or report semantics are changed.",
       "drift_condition": "Fail if class, message regex, source path, command, or count changes without updating this baseline."
     }
   ]
