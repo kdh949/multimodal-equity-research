@@ -1027,6 +1027,31 @@ class ValidationGateReport:
         return payload
 
     @property
+    def target_horizon(self) -> int | None:
+        value = self.metrics.get("target_horizon")
+        return int(value) if value is not None else None
+
+    @property
+    def requested_gap_periods(self) -> int | None:
+        value = self.metrics.get("requested_gap_periods")
+        return int(value) if value is not None else None
+
+    @property
+    def requested_embargo_periods(self) -> int | None:
+        value = self.metrics.get("requested_embargo_periods")
+        return int(value) if value is not None else None
+
+    @property
+    def effective_gap_periods(self) -> int | None:
+        value = self.metrics.get("effective_gap_periods")
+        return int(value) if value is not None else None
+
+    @property
+    def effective_embargo_periods(self) -> int | None:
+        value = self.metrics.get("effective_embargo_periods")
+        return int(value) if value is not None else None
+
+    @property
     def baseline_comparison_entries(self) -> list[dict[str, Any]]:
         return list(self.baseline_comparisons.values())
 
@@ -2954,6 +2979,18 @@ def build_validity_gate_report(
     embargo_periods = int(
         getattr(walk_forward_config, "embargo_periods", getattr(config, "embargo_periods", 0))
     )
+    requested_gap_periods = int(
+        getattr(walk_forward_config, "requested_gap_periods", gap_periods)
+    )
+    requested_embargo_periods = int(
+        getattr(walk_forward_config, "requested_embargo_periods", embargo_periods)
+    )
+    effective_gap_periods = int(getattr(walk_forward_config, "effective_gap_periods", gap_periods))
+    effective_embargo_periods = int(
+        getattr(walk_forward_config, "effective_embargo_periods", embargo_periods)
+    )
+    gap_periods = effective_gap_periods
+    embargo_periods = effective_embargo_periods
     min_train_observations = int(getattr(walk_forward_config, "min_train_observations", 0))
 
     gate_results: dict[str, dict[str, Any]] = {}
@@ -2978,6 +3015,24 @@ def build_validity_gate_report(
         baseline_input.to_dict()
         for baseline_input in baseline_input_objects
     ]
+    requested_gap_embargo_warnings: list[str] = []
+    if requested_gap_periods < gap_periods:
+        requested_gap_embargo_warnings.append(
+            f"requested_gap_periods={requested_gap_periods} raised to effective_gap_periods={gap_periods}"
+        )
+    if requested_embargo_periods < embargo_periods:
+        requested_gap_embargo_warnings.append(
+            "requested_embargo_periods="
+            f"{requested_embargo_periods} raised to effective_embargo_periods={embargo_periods}"
+        )
+    if requested_gap_embargo_warnings:
+        gate_results["requested_gap_embargo_adjustment"] = {
+            "status": "warning",
+            "reason": "; ".join(requested_gap_embargo_warnings),
+            "affects_system": False,
+            "affects_strategy": False,
+            "affects_pass_fail": False,
+        }
 
     horizon_metrics = _horizon_validation_metrics(
         predictions,
@@ -3248,6 +3303,18 @@ def build_validity_gate_report(
         equity_curve,
         strategy_metrics,
     )
+    label_columns = sorted(
+        [
+            column
+            for column in predictions.columns
+            if _horizon_from_target(str(column)) is not None
+        ],
+        key=lambda column: (_horizon_from_target(str(column)) or 0, str(column)),
+    )
+    label_coverage = {
+        column: float(pd.to_numeric(predictions[column], errors="coerce").notna().mean())
+        for column in label_columns
+    }
     metrics = {
         "fold_count": _count_validation_folds(validation_summary),
         "oos_fold_count": _count_oos_folds(validation_summary),
@@ -3255,6 +3322,10 @@ def build_validity_gate_report(
         "insufficient_data_reasons": _insufficient_data_reasons(gate_results),
         "target_column": target_column,
         "target_horizon": target_horizon,
+        "target_horizon_periods": target_horizon,
+        "realized_return_column": reporting_target_column,
+        "label_columns": label_columns,
+        "label_coverage": label_coverage,
         "reporting_target_column": reporting_target_column,
         "reporting_target_horizon": (
             _horizon_from_target(reporting_target_column) or target_horizon
@@ -3268,6 +3339,10 @@ def build_validity_gate_report(
             for horizon, metrics in horizon_metrics.items()
             if metrics.get("label") == "diagnostic"
         },
+        "requested_gap_periods": requested_gap_periods,
+        "requested_embargo_periods": requested_embargo_periods,
+        "effective_gap_periods": gap_periods,
+        "effective_embargo_periods": embargo_periods,
         "gap_periods": gap_periods,
         "embargo_periods": embargo_periods,
         "purge_embargo_application": purge_embargo_application,

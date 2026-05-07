@@ -20,6 +20,13 @@ def test_forward_return_uses_next_period_only() -> None:
         check_names=False,
     )
     assert pd.isna(features["forward_return_1"].iloc[-1])
+    expected_5 = features["adj_close"].pct_change(5).shift(-5)
+    pd.testing.assert_series_equal(
+        features["forward_return_5"],
+        expected_5,
+        check_names=False,
+    )
+    assert features["forward_return_5"].tail(5).isna().all()
 
 
 def test_default_forward_return_horizons_are_generated_without_lookahead() -> None:
@@ -38,7 +45,14 @@ def test_price_features_include_liquidity_and_volatility() -> None:
     data = SyntheticMarketDataProvider(periods=80, seed=2).get_history(["AAPL", "MSFT"])
     features = build_price_features(data)
 
-    assert {"volatility_20", "liquidity_score", "rsi_14", "ma_ratio_20"}.issubset(features.columns)
+    assert {
+        "volatility_20",
+        "liquidity_score",
+        "rsi_14",
+        "ma_ratio_20",
+        "forward_return_5",
+        "forward_return_20",
+    }.issubset(features.columns)
     assert features.groupby("ticker")["forward_return_1"].apply(lambda s: s.notna().sum()).min() > 0
 
 

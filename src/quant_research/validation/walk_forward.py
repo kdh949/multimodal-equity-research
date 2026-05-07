@@ -180,6 +180,9 @@ class WalkForwardConfig:
     tabular_num_threads: int = 1
     embargo_periods: int = DEFAULT_PURGE_EMBARGO_DAYS
     prediction_horizon_periods: int = 1
+    target_horizon: int | None = None
+    requested_gap_periods: int | None = None
+    requested_embargo_periods: int | None = None
 
     def __post_init__(self) -> None:
         train_periods = int(self.train_periods)
@@ -189,13 +192,41 @@ class WalkForwardConfig:
         window_mode = str(self.window_mode).strip().lower()
         if window_mode not in {"rolling", "expanding"}:
             raise ValueError("window_mode must be either 'rolling' or 'expanding'")
-        prediction_horizon_periods = max(1, int(self.prediction_horizon_periods))
+        prediction_horizon_periods = max(
+            1,
+            int(
+                self.target_horizon
+                if self.target_horizon is not None
+                else self.prediction_horizon_periods
+            ),
+        )
+        requested_gap_periods = (
+            int(self.requested_gap_periods)
+            if self.requested_gap_periods is not None
+            else int(self.gap_periods)
+        )
+        requested_embargo_periods = (
+            int(self.requested_embargo_periods)
+            if self.requested_embargo_periods is not None
+            else int(self.embargo_periods)
+        )
         object.__setattr__(self, "train_periods", train_periods)
         object.__setattr__(self, "test_periods", test_periods)
         object.__setattr__(self, "window_mode", window_mode)
         object.__setattr__(self, "prediction_horizon_periods", prediction_horizon_periods)
+        object.__setattr__(self, "target_horizon", prediction_horizon_periods)
+        object.__setattr__(self, "requested_gap_periods", requested_gap_periods)
+        object.__setattr__(self, "requested_embargo_periods", requested_embargo_periods)
         object.__setattr__(self, "gap_periods", max(int(self.gap_periods), prediction_horizon_periods))
         object.__setattr__(self, "embargo_periods", max(int(self.embargo_periods), prediction_horizon_periods))
+
+    @property
+    def effective_gap_periods(self) -> int:
+        return self.gap_periods
+
+    @property
+    def effective_embargo_periods(self) -> int:
+        return self.embargo_periods
 
 
 @dataclass(frozen=True)
@@ -729,7 +760,13 @@ def walk_forward_predict(
                 "test_periods": int(config.test_periods),
                 "window_mode": config.window_mode,
                 "target_column": target,
+                "target_horizon": int(config.prediction_horizon_periods),
+                "target_horizon_periods": int(config.prediction_horizon_periods),
                 "prediction_horizon_periods": int(config.prediction_horizon_periods),
+                "requested_gap_periods": int(config.requested_gap_periods),
+                "requested_embargo_periods": int(config.requested_embargo_periods),
+                "effective_gap_periods": int(config.gap_periods),
+                "effective_embargo_periods": int(config.embargo_periods),
                 "gap_periods": int(config.gap_periods),
                 "purge_periods": int(config.gap_periods),
                 "purge_gap_periods": int(config.gap_periods),
@@ -750,6 +787,7 @@ def walk_forward_predict(
                 "temporal_integrity_status": "pass",
                 "train_validation_test_order_valid": True,
                 "future_data_in_train": False,
+                "label_overlap_violations": 0,
                 **_hyperparameter_tuning_summary_fields(tuning_scopes_by_fold[fold.fold]),
                 "model_name": model.actual_model_name,
                 "is_oos": fold.fold in oos_fold_ids,
@@ -1033,7 +1071,11 @@ def _config_for_target(config: WalkForwardConfig, target: str) -> WalkForwardCon
         and config.embargo_periods >= prediction_horizon_periods
     ):
         return config
-    return replace(config, prediction_horizon_periods=prediction_horizon_periods)
+    return replace(
+        config,
+        prediction_horizon_periods=prediction_horizon_periods,
+        target_horizon=prediction_horizon_periods,
+    )
 
 
 def _target_horizon(target: str) -> int | None:
@@ -1204,7 +1246,13 @@ def _fold_fallback_summary_row(
         "test_periods": int(config.test_periods),
         "window_mode": config.window_mode,
         "target_column": target,
+        "target_horizon": int(config.prediction_horizon_periods),
+        "target_horizon_periods": int(config.prediction_horizon_periods),
         "prediction_horizon_periods": int(config.prediction_horizon_periods),
+        "requested_gap_periods": int(config.requested_gap_periods),
+        "requested_embargo_periods": int(config.requested_embargo_periods),
+        "effective_gap_periods": int(config.gap_periods),
+        "effective_embargo_periods": int(config.embargo_periods),
         "gap_periods": int(config.gap_periods),
         "purge_periods": int(config.gap_periods),
         "purge_gap_periods": int(config.gap_periods),
@@ -1225,6 +1273,7 @@ def _fold_fallback_summary_row(
         "temporal_integrity_status": "pass",
         "train_validation_test_order_valid": True,
         "future_data_in_train": False,
+        "label_overlap_violations": 0,
         **_hyperparameter_tuning_summary_fields(tuning_scope),
         "model_name": DETERMINISTIC_FALLBACK_MODEL_NAME,
         "is_oos": is_oos,
