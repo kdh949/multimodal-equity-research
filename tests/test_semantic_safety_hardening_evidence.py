@@ -16,7 +16,6 @@ from quant_research.signals.engine import (
     require_signal_generation_gate_pass,
 )
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 TAXONOMY_PATH = REPOSITORY_ROOT / "docs" / "semantic-safety-taxonomies.json"
 MANIFEST_PATH = REPOSITORY_ROOT / "docs" / "semantic-safety-evidence-manifest.json"

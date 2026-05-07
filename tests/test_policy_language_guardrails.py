@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-
 # Guardrail/policy audit: broker/order vocabulary is allowed in docs/tests only
 # when nearby text makes the reference an explicit prohibition or evidence check.
 BROKER_ORDER_POLICY_LANGUAGE = re.compile(

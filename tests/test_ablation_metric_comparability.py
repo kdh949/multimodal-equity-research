@@ -10,7 +10,6 @@ import quant_research.pipeline as pipeline
 from quant_research.pipeline import PipelineConfig
 from quant_research.validation import DEFAULT_VALIDITY_GATE_ABLATION_MODE_IDS
 
-
 _REQUIRED_ROW_METRIC_FIELDS = {
     "cagr",
     "sharpe",

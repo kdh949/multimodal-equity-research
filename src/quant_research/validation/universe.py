@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from typing import Any, Literal
 
 from quant_research.config import DEFAULT_BENCHMARK_TICKER
@@ -318,7 +318,7 @@ class UniverseSnapshot:
     experiment_id: str
     snapshot_date: date
     constituents: tuple[UniverseConstituent, ...]
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     universe_name: str = DEFAULT_UNIVERSE_NAME
     constituent_identifier_fields: tuple[str, ...] = (
         DEFAULT_UNIVERSE_CONSTITUENT_IDENTIFIER_FIELDS
@@ -890,20 +890,20 @@ def _coerce_snapshot_date(value: object, field_name: str) -> date:
 
 def _coerce_snapshot_created_at(value: object | None) -> datetime:
     if value is None:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
     if isinstance(value, datetime):
         result = value
     else:
         raw = str(value).strip()
         if not raw:
-            return datetime.now(timezone.utc)
+            return datetime.now(UTC)
         try:
             result = datetime.fromisoformat(raw.replace("Z", "+00:00"))
         except ValueError as exc:
             raise ValueError("created_at must be an ISO datetime") from exc
     if result.tzinfo is None:
-        result = result.replace(tzinfo=timezone.utc)
-    return result.astimezone(timezone.utc)
+        result = result.replace(tzinfo=UTC)
+    return result.astimezone(UTC)
 
 
 def _require_mapping(value: object, field_name: str) -> dict[str, object]:

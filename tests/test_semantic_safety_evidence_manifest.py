@@ -6,7 +6,6 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = REPOSITORY_ROOT / "docs" / "semantic-safety-evidence-manifest.json"
 BROKER_ORDER_POLICY_LANGUAGE = re.compile(

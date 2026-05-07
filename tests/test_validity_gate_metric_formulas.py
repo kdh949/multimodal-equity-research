@@ -8,9 +8,9 @@ import pytest
 import quant_research.validation.gate as gate_module
 from quant_research.validation import build_validity_gate_report
 from quant_research.validation.gate import (
-    calculate_top_decile_20d_excess_return,
     _cost_adjustment_metrics,
     _rank_ic_metrics_for_horizon,
+    calculate_top_decile_20d_excess_return,
 )
 
 

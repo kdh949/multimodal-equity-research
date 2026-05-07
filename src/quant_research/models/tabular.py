@@ -302,7 +302,7 @@ def _mark_pipeline_final_estimator_fitted(model: BaseEstimator) -> None:
         return
     # sklearn 1.6+ warns, and 1.8 will error, when a fitted custom final
     # estimator exposes no fitted trailing-underscore attribute.
-    setattr(final_estimator, "_quant_research_fitted_", True)
+    final_estimator._quant_research_fitted_ = True
 
 
 class _LightGBMSubprocessError(RuntimeError):

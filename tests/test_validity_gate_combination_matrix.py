@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from types import SimpleNamespace
-from typing import Callable
 
 import pandas as pd
 import pytest

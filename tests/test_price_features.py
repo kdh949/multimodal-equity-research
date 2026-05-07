@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pandas as pd
 
-from quant_research.data.timestamps import add_price_timestamps
 from quant_research.data.market import SyntheticMarketDataProvider
+from quant_research.data.timestamps import add_price_timestamps
 from quant_research.features.price import build_price_features
 from quant_research.validation.horizons import DEFAULT_VALIDATION_HORIZONS, forward_return_column
 

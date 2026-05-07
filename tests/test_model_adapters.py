@@ -383,7 +383,7 @@ def test_tabular_pipeline_fitted_marker_does_not_change_prediction_outputs() -> 
     final_estimator = model.fitted_model.steps[-1][1]
 
     with_marker = model.predict(train.tail(12))
-    assert getattr(final_estimator, "_quant_research_fitted_") is True
+    assert final_estimator._quant_research_fitted_ is True
 
     delattr(final_estimator, "_quant_research_fitted_")
     without_marker = model.predict(train.tail(12))
