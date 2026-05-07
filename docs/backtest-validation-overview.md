@@ -11,7 +11,7 @@
 |---|---|
 | 예측 모델 | LightGBM (TabularReturnModel) |
 | 검증 방식 | Walk-Forward Cross-Validation |
-| 예측 대상 | 1일 선행 수익률 (`forward_return_1`) |
+| 예측 대상 | 20일 선행 수익률 (`forward_return_20`) |
 | 입력 피처 | 가격·기술지표·거래량·뉴스감성·SEC공시 등 융합 피처 |
 
 ## 사용 데이터
@@ -19,10 +19,11 @@
 | 항목 | 내용 |
 |---|---|
 | 데이터 소스 | yfinance (인터넷 실시간) |
-| 분석 종목 | SPY, QQQ, AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA, JPM |
+| 분석 종목 | 대표 미국 대형 유동주 30개 기본 유니버스 |
 | 분석 기간 | 실행일 기준 과거 2년 |
 | 뉴스 소스 | yfinance News API + GDELT |
-| 공시 소스 | SEC EDGAR API (SPY·QQQ 제외, CIK 미등록 ETF) |
+| 공시 소스 | SEC EDGAR API (CIK 미등록 종목은 중립 SEC feature로 계속 진행) |
+| 벤치마크 | SPY (전략 후보가 아니라 비교 기준 데이터) |
 
 ## 검증 파이프라인 흐름
 
@@ -37,7 +38,7 @@ SEC 공시 피처 생성 (규칙 기반)
         ↓
 피처 융합 (fuse_features)
         ↓
-Walk-Forward 분할 (훈련 90일 / 테스트 20일 / 간격 1일)
+Walk-Forward 분할 (기본 20일 target, purge/embargo 최소 60 거래일)
         ↓
 각 Fold: LightGBM 학습 → OOS 예측
         ↓
@@ -64,8 +65,9 @@ Walk-Forward 분할 (훈련 90일 / 테스트 20일 / 간격 1일)
 |---|---|
 | `date` | 예측 대상 날짜 |
 | `ticker` | 종목 코드 |
-| `expected_return` | 모델이 예측한 1일 수익률 |
-| `forward_return_1` | 실제 발생한 1일 수익률 |
+| `expected_return` | 모델이 예측한 20일 수익률 |
+| `forward_return_20` | 실제 발생한 20일 수익률 |
+| `forward_return_1`, `forward_return_5` | 진단용 단기 horizon 수익률 |
 | `fold` | 속한 Walk-Forward fold 번호 |
 | `is_oos` | 마지막 fold(Out-of-Sample) 여부 |
 

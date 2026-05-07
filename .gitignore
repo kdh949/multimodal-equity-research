@@ -9,6 +9,8 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.ouroboros/
+.ouroboros_eval_artifact.md
 
 data/raw/
 data/processed/

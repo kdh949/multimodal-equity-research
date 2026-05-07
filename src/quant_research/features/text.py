@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from quant_research.data.news import NewsItem
+from quant_research.data.timestamps import PRICE_TIMEZONE, UTC_TIMEZONE, timestamp_utc
 
 POSITIVE_WORDS = {
     "beat",
@@ -48,6 +49,7 @@ EVENT_KEYWORDS = {
 RECENCY_ALPHA_DEFAULT = 0.15
 RECENCY_WINDOWS = (5, 20)
 NEWS_LAG_PERIODS_DEFAULT = 1
+_US_MARKET_CLOSE_OFFSET = pd.Timedelta(hours=16)
 
 
 @dataclass
@@ -97,9 +99,13 @@ def build_news_features(
         scored = analyzer.score(scoring_text)
         rows.append(
             {
-                "date": pd.Timestamp(item.published_at).normalize(),
+                "date": _feature_date(item.availability_timestamp),
                 "ticker": item.ticker,
                 "source": item.source,
+                "event_timestamp": item.event_timestamp,
+                "availability_timestamp": item.availability_timestamp,
+                "source_timestamp": item.source_timestamp,
+                "timezone": item.timezone or UTC_TIMEZONE,
                 "sentiment_score": float(scored["sentiment_score"]),
                 "negative_flag": bool(scored["negative_flag"]),
                 "event_tag": str(scored["event_tag"]),
@@ -128,6 +134,10 @@ def build_news_features(
             {
                 "date": date,
                 "ticker": ticker,
+                "news_event_timestamp": _timestamp_min(group["event_timestamp"]),
+                "news_availability_timestamp": _timestamp_max(group["availability_timestamp"]),
+                "news_source_timestamp": _timestamp_max(group["source_timestamp"]),
+                "news_timezone": UTC_TIMEZONE,
                 "news_article_count": article_count,
                 "news_sentiment_mean": weighted_sentiment,
                 "news_negative_ratio": group["negative_flag"].mean(),
@@ -156,9 +166,17 @@ def expand_news_features_to_calendar(
         expanded = calendar[["date", "ticker"]].drop_duplicates().copy()
         for column in _empty_news_features().columns:
             if column not in {"date", "ticker"}:
-                expanded[column] = 0.0 if column != "news_top_event" else "none"
+                if column == "news_top_event":
+                    expanded[column] = "none"
+                elif column == "news_timezone":
+                    expanded[column] = UTC_TIMEZONE
+                elif column in {"news_event_timestamp", "news_availability_timestamp", "news_source_timestamp"}:
+                    expanded[column] = pd.NaT
+                else:
+                    expanded[column] = 0.0
         return expanded
 
+    _validate_news_feature_merge_cutoffs(news_features)
     base = calendar[["date", "ticker"]].drop_duplicates().sort_values(["ticker", "date"])
     merged = base.merge(news_features, on=["date", "ticker"], how="left")
     numeric_cols = [
@@ -192,6 +210,8 @@ def expand_news_features_to_calendar(
     ]
     merged[numeric_fill] = merged[numeric_fill].fillna(0.0)
     merged["news_top_event"] = merged["news_top_event"].fillna("none")
+    if "news_timezone" in merged:
+        merged["news_timezone"] = merged["news_timezone"].fillna(UTC_TIMEZONE)
     return merged
 
 
@@ -200,6 +220,10 @@ def _empty_news_features() -> pd.DataFrame:
         columns=[
             "date",
             "ticker",
+            "news_event_timestamp",
+            "news_availability_timestamp",
+            "news_source_timestamp",
+            "news_timezone",
             "news_article_count",
             "news_sentiment_mean",
             "news_negative_ratio",
@@ -240,7 +264,10 @@ def _add_news_recency_features(
     frame["news_recency_decay"] = grouped["news_article_count"].transform(
         lambda series: series.ewm(alpha=alpha, adjust=False).mean()
     )
-    frame["news_staleness_days"] = grouped.apply(_staleness_days).reset_index(level=0, drop=True)
+    staleness = pd.Series(index=frame.index, dtype=float)
+    for _, group in grouped:
+        staleness.loc[group.index] = _staleness_days(group)
+    frame["news_staleness_days"] = staleness
     for window in coverage_windows:
         frame[f"news_coverage_{window}d"] = grouped["news_article_count"].transform(
             lambda series, lookback=window: series.rolling(lookback, min_periods=1).sum()
@@ -257,14 +284,9 @@ def _staleness_days(group: pd.DataFrame) -> pd.Series:
         if row["news_article_count"] > 0:
             last_seen = row["date"]
         if last_seen is None:
-            stale.at[index] = float("nan")
+            stale.at[index] = 999.0
         else:
             stale.at[index] = (row["date"] - last_seen).days
-    if stale.isna().all():
-        stale.fillna(999.0, inplace=True)
-    else:
-        fill_value = float(stale.max())
-        stale.fillna(fill_value + 1, inplace=True)
     return stale.reindex(group.index)
 
 
@@ -281,10 +303,96 @@ def _apply_news_lag(frame: pd.DataFrame, news_lag_periods: int) -> pd.DataFrame:
     ]
     for column in lag_columns_numeric:
         frame[column] = grouped[column].shift(news_lag_periods)
-    for column in ["news_top_event"]:
+    for column in [
+        "news_top_event",
+        "news_event_timestamp",
+        "news_availability_timestamp",
+        "news_source_timestamp",
+        "news_timezone",
+    ]:
         if column in frame:
             frame[column] = grouped[column].shift(news_lag_periods)
     return frame
+
+
+def _validate_news_feature_merge_cutoffs(news_features: pd.DataFrame) -> None:
+    required = {"date", "ticker", "news_event_timestamp", "news_availability_timestamp"}
+    missing = sorted(required.difference(news_features.columns))
+    if missing:
+        raise ValueError(f"news_features must include point-in-time text metadata columns: {missing}")
+
+    normalized = news_features.copy()
+    normalized["date"] = pd.to_datetime(normalized["date"], errors="coerce").dt.normalize()
+    availability = timestamp_utc(normalized["news_availability_timestamp"], UTC_TIMEZONE)
+    event_timestamp = timestamp_utc(normalized["news_event_timestamp"], UTC_TIMEZONE)
+
+    missing_availability = availability.isna()
+    if missing_availability.any():
+        first_index = normalized.index[missing_availability][0]
+        raise ValueError(
+            f"news_features row {first_index} has sentiment/event/risk features without "
+            "news_availability_timestamp"
+        )
+
+    impossible_order = event_timestamp.notna() & (availability < event_timestamp)
+    if impossible_order.any():
+        first_index = normalized.index[impossible_order][0]
+        raise ValueError(
+            f"news_features row {first_index} has news_availability_timestamp before "
+            "news_event_timestamp"
+        )
+
+    earliest_feature_date = availability.map(_feature_date)
+    early_merge = normalized["date"].notna() & earliest_feature_date.notna() & (
+        normalized["date"] < earliest_feature_date
+    )
+    if early_merge.any():
+        first_index = normalized.index[early_merge][0]
+        ticker = normalized.loc[first_index, "ticker"]
+        feature_date = normalized.loc[first_index, "date"]
+        available_date = earliest_feature_date.loc[first_index]
+        raise ValueError(
+            "news_features row "
+            f"{first_index} for {ticker} would merge sentiment/event/risk features on "
+            f"{feature_date.date()} before public availability feature date {available_date.date()}"
+        )
+
+
+def _feature_date(value: object) -> pd.Timestamp:
+    timestamp = _as_utc_timestamp(value)
+    if pd.isna(timestamp):
+        return pd.NaT
+    local_timestamp = timestamp.tz_convert(PRICE_TIMEZONE)
+    local_midnight = local_timestamp.normalize()
+    local_date = local_midnight.tz_localize(None)
+    if (local_timestamp - local_midnight) > _US_MARKET_CLOSE_OFFSET:
+        local_date = local_date + pd.offsets.BDay(1)
+    return pd.Timestamp(local_date).normalize()
+
+
+def _as_utc_timestamp(value: object) -> pd.Timestamp:
+    if value is None or pd.isna(value):
+        return pd.NaT
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return pd.NaT
+    if isinstance(parsed, pd.Timestamp) and parsed.tzinfo is not None:
+        return parsed.tz_convert(UTC_TIMEZONE)
+    return pd.Timestamp(parsed).tz_localize(UTC_TIMEZONE)
+
+
+def _timestamp_max(values: pd.Series) -> pd.Timestamp:
+    normalized = timestamp_utc(values.dropna(), UTC_TIMEZONE)
+    if normalized.empty:
+        return pd.NaT
+    return normalized.max()
+
+
+def _timestamp_min(values: pd.Series) -> pd.Timestamp:
+    normalized = timestamp_utc(values.dropna(), UTC_TIMEZONE)
+    if normalized.empty:
+        return pd.NaT
+    return normalized.min()
 
 
 def _score_token_count(scored: dict[str, float | str | bool], text: str) -> float:

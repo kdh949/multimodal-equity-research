@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+from quant_research.data.timestamps import validate_generated_feature_cutoffs
 from quant_research.features.text import expand_news_features_to_calendar
 
 
@@ -58,6 +59,7 @@ def fuse_features(
     if "sec_summary_ref" in fused:
         fused["sec_summary_ref"] = fused["sec_summary_ref"].fillna("").astype(str)
 
+    validate_generated_feature_cutoffs(fused, label="fused feature pipeline")
     return fused
 
 

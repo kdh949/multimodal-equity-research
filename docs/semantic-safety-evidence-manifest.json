@@ -1,0 +1,927 @@
+{
+  "schema_version": 2,
+  "completion_claim_status": "independently_verified_locally",
+  "verifiability_standard": {
+    "required_command": "uv --cache-dir .uv-cache run pytest tests/test_semantic_safety_evidence_manifest.py tests/test_semantic_safety_hardening_evidence.py tests/test_architecture_guards.py tests/test_signal_engine.py tests/test_backtest_risk.py tests/test_validity_gate_metric_formulas.py tests/test_report_generation.py tests/test_report_only_execution_isolation.py tests/test_warning_baseline_documentation.py",
+    "expected_invariant": "Research-only safety claims are backed by independent tests, fixtures, static taxonomies, source inventories, and documented commands.",
+    "path_reference": "docs/semantic-safety-evidence-manifest.json",
+    "pass_fail_condition": "Fail if any acceptance criterion lacks an external artifact, concrete command, expected result, source path, or anti-self-reference check."
+  },
+  "semantic_boundaries": {
+    "live_trading_order_implementation": "Prohibited in production executable paths.",
+    "policy_language": "Non-executable documentation that states prohibitions or review scope.",
+    "guardrail_language": "Tests and fixtures that assert forbidden implementation terms are blocked.",
+    "audit_language": "Static inventories, taxonomies, and manifests used by reviewers.",
+    "test_fixture_language": "Synthetic unsafe examples or report fixtures used only by tests.",
+    "final_action_label": "BUY, SELL, or HOLD row-level action emitted by src/quant_research/signals/engine.py.",
+    "model_prediction_label": "Structured model feature or diagnostic; never a final action.",
+    "report_label": "Serialized or rendered review artifact label; never an execution instruction.",
+    "validation_diagnostic": "Gate/report metadata that can warn or document but cannot bypass deterministic action generation."
+  },
+  "production_surface": {
+    "included_executable_paths": [
+      "app.py",
+      "scripts/*.py",
+      "src/quant_research/**/*.py"
+    ],
+    "src_quant_research_production_executable_paths": [
+      "src/quant_research/backtest/**/*.py",
+      "src/quant_research/data/**/*.py",
+      "src/quant_research/dashboard/**/*.py",
+      "src/quant_research/features/**/*.py",
+      "src/quant_research/models/**/*.py",
+      "src/quant_research/signals/**/*.py",
+      "src/quant_research/validation/**/*.py",
+      "src/quant_research/config.py",
+      "src/quant_research/performance.py",
+      "src/quant_research/pipeline.py",
+      "src/quant_research/runtime.py"
+    ],
+    "excluded_non_production_paths": [
+      {
+        "path": "docs/**",
+        "classification": "documentation",
+        "rationale": "Narrative policy, audit inventories, and reviewer commands only."
+      },
+      {
+        "path": "tests/**",
+        "classification": "guardrail",
+        "rationale": "Executable checks and synthetic unsafe examples, not shipped runtime paths."
+      },
+      {
+        "path": "tests/fixtures/**",
+        "classification": "fixture",
+        "rationale": "Static fixture inputs used by tests."
+      },
+      {
+        "path": "reports/**",
+        "classification": "report",
+        "rationale": "Generated report output location; artifacts are not committed."
+      },
+      {
+        "path": ".pytest_cache/**",
+        "classification": "generated_outputs",
+        "rationale": "Local test runner cache, not source evidence."
+      }
+    ],
+    "inclusion_rule": "app.py, scripts/*.py, and src/quant_research/**/*.py are executable production or operator entrypoint paths.",
+    "reachability_basis": "tests/test_semantic_safety_hardening_evidence.py regenerates the path inventory and assigns application_entrypoint, documented_command, src_package, validation_flow, backtest_flow, report_flow, or signal_flow.",
+    "import_roots": [
+      "quant_research"
+    ],
+    "flow_roots": [
+      "app.py",
+      "scripts/run_backtest_validation.py",
+      "src/quant_research/signals/engine.py",
+      "src/quant_research/backtest/engine.py",
+      "src/quant_research/validation/gate.py",
+      "src/quant_research/validation/report_generation.py"
+    ],
+    "explicit_exemptions": [
+      "docs/**",
+      "tests/**",
+      "tests/fixtures/**",
+      "reports/**",
+      ".pytest_cache/**"
+    ],
+    "exception_policy": "No broker/order implementation exceptions are allowed in included executable paths. Policy/audit terms in validation/report strings are classified separately and may not create runtime broker adapters or order placement calls.",
+    "test_names": [
+      "tests/test_semantic_safety_hardening_evidence.py::test_production_surface_inventory_covers_entrypoints_and_reachability",
+      "tests/test_semantic_safety_hardening_evidence.py::test_excluded_paths_are_classified_as_docs_tests_fixtures_reports_generated_or_audit_policy",
+      "tests/test_architecture_guards.py::test_live_trading_order_audit_scope_covers_application_and_package_code",
+      "tests/test_architecture_guards.py::test_production_guard_scope_excludes_allowlisted_docs_and_tests",
+      "tests/test_semantic_safety_evidence_manifest.py::test_manifest_documents_production_surface_boundaries"
+    ]
+  },
+  "production_enforced": {
+    "enforced": true,
+    "enforcement_location": "tests/test_architecture_guards.py and tests/test_semantic_safety_hardening_evidence.py",
+    "covered_paths": [
+      "app.py",
+      "scripts/*.py",
+      "src/quant_research/**/*.py"
+    ],
+    "exception_policy": "No broker/order implementation exceptions in production executable paths.",
+    "test_names": [
+      "tests/test_architecture_guards.py::test_executable_source_does_not_contain_broker_order_api_terms",
+      "tests/test_architecture_guards.py::test_source_does_not_call_broker_order_apis",
+      "tests/test_architecture_guards.py::test_executable_source_does_not_define_live_execution_payload_keys",
+      "tests/test_semantic_safety_hardening_evidence.py::test_production_static_broker_order_audit_has_no_unallowlisted_occurrences"
+    ],
+    "behavior_change_expected": false
+  },
+  "broker_order_term_taxonomy": {
+    "artifact": "docs/semantic-safety-taxonomies.json",
+    "tests": [
+      "tests/test_semantic_safety_hardening_evidence.py::test_broker_order_taxonomy_classifies_prohibited_policy_and_ambiguous_terms"
+    ]
+  },
+  "broker_order_term_allowlist": [
+    {
+      "term": "broker|brokers|order|orders|place_order|submit_order|create_order|market_order|limit_order|send_order|live_trade|execution|execute trade|place trade|submit trade|send order|매수 주문|매도 주문|주문 전송",
+      "path": "docs/**",
+      "stable_occurrence_id": "generated:docs-broker-order-policy-hits",
+      "line_number": "generated:exact-occurrence-report",
+      "matched_text": "Generated per-line matches in docs excluding this manifest.",
+      "context_excerpt": "Generated context excerpt for each docs occurrence.",
+      "allowed_context": "Policy and audit documentation describing prohibited live trading/order behavior.",
+      "reason": "Documents the research-only boundary and the hard-fail production guard.",
+      "owner_invariant": "No production executable path may implement live trading, broker execution, or order placement.",
+      "classification": "policy",
+      "generated_audit_report": {
+        "test_name": "tests/test_semantic_safety_hardening_evidence.py::test_generated_broker_order_audit_report_expands_allowlist_to_exact_occurrences",
+        "expands_to_exact_occurrences": true,
+        "required_fields": [
+          "stable_occurrence_id",
+          "path",
+          "line_number",
+          "matched_text",
+          "context_excerpt",
+          "allowed_context",
+          "reason",
+          "owner_invariant",
+          "classification"
+        ]
+      }
+    },
+    {
+      "term": "broker|brokers|order|orders|place_order|submit_order|create_order|market_order|limit_order|send_order|live_trade|execution|execute trade|place trade|submit trade|send order|매수 주문|매도 주문|주문 전송",
+      "path": "tests/**",
+      "stable_occurrence_id": "generated:tests-broker-order-guardrail-hits",
+      "line_number": "generated:exact-occurrence-report",
+      "matched_text": "Generated per-line matches in tests and fixtures.",
+      "context_excerpt": "Generated context excerpt for each tests occurrence.",
+      "allowed_context": "Guardrail tests, synthetic unsafe examples, and static fixtures.",
+      "reason": "Tests must name forbidden terms to prove the guards fail on unsafe implementation attempts.",
+      "owner_invariant": "Unallowlisted broker/order implementation terms fail in production executable paths.",
+      "classification": "guardrail",
+      "generated_audit_report": {
+        "test_name": "tests/test_semantic_safety_hardening_evidence.py::test_generated_broker_order_audit_report_expands_allowlist_to_exact_occurrences",
+        "expands_to_exact_occurrences": true,
+        "required_fields": [
+          "stable_occurrence_id",
+          "path",
+          "line_number",
+          "matched_text",
+          "context_excerpt",
+          "allowed_context",
+          "reason",
+          "owner_invariant",
+          "classification"
+        ]
+      }
+    },
+    {
+      "term": "broker|order|orders|execution|live_trade",
+      "path": "tests/fixtures/**",
+      "stable_occurrence_id": "generated:fixture-broker-order-hits",
+      "line_number": "generated:exact-occurrence-report",
+      "matched_text": "Generated per-line matches in fixtures.",
+      "context_excerpt": "Generated context excerpt for each fixture occurrence.",
+      "allowed_context": "Static fixtures for report-only and scope-boundary tests.",
+      "reason": "Fixtures encode non-production report and schema evidence.",
+      "owner_invariant": "Fixtures must not become generated production artifacts.",
+      "classification": "fixture",
+      "generated_audit_report": {
+        "test_name": "tests/test_semantic_safety_hardening_evidence.py::test_generated_broker_order_audit_report_expands_allowlist_to_exact_occurrences",
+        "expands_to_exact_occurrences": true
+      }
+    }
+  ],
+  "static_audit_report": {
+    "scan_command": "uv --cache-dir .uv-cache run pytest tests/test_semantic_safety_hardening_evidence.py::test_generated_broker_order_audit_report_expands_allowlist_to_exact_occurrences tests/test_semantic_safety_hardening_evidence.py::test_production_static_broker_order_audit_has_no_unallowlisted_occurrences",
+    "scanned_paths": [
+      "app.py",
+      "scripts/*.py",
+      "src/quant_research/**/*.py",
+      "docs/**",
+      "tests/**"
+    ],
+    "matched_occurrences": "Generated at test runtime with stable_occurrence_id path:line_number.",
+    "allowlist_resolution": "Docs/tests/fixtures terms expand to exact generated occurrences; production implementation terms have no allowlist.",
+    "unexpected_findings": [],
+    "failure_criteria": "Fail if production executable paths contain prohibited implementation terms or if generated allowlist occurrences lack exact path, line, text, context, reason, invariant, and classification."
+  },
+  "action_like_text_taxonomy": {
+    "artifact": "docs/semantic-safety-taxonomies.json",
+    "tests": [
+      "tests/test_semantic_safety_hardening_evidence.py::test_action_like_text_taxonomy_detects_variants_and_negation",
+      "tests/test_semantic_safety_hardening_evidence.py::test_behavioral_passthrough_matrix_blocks_action_like_model_text"
+    ]
+  },
+  "final_label_provenance": {
+    "source_module": "src/quant_research/signals/engine.py",
+    "deterministic_engine_function": "DeterministicSignalEngine.generate",
+    "validation_gates": [
+      "require_signal_generation_gate_pass",
+      "src/quant_research/backtest/engine.py::run_long_only_backtest"
+    ],
+    "allowed_final_labels": [
+      "BUY",
+      "SELL",
+      "HOLD"
+    ],
+    "prohibited_upstream_sources": [
+      "src/quant_research/models/**/*.py",
+      "src/quant_research/features/text.py",
+      "src/quant_research/features/sec.py",
+      "LLM free text",
+      "model prediction payload action keys"
+    ],
+    "non_final_label_contexts": [
+      "fixture_expectation",
+      "report_label",
+      "diagnostic",
+      "audit_language",
+      "documentation"
+    ],
+    "provenance_tests": [
+      "tests/test_architecture_guards.py::test_final_action_label_emissions_are_created_only_by_signal_engine",
+      "tests/test_architecture_guards.py::test_model_llm_output_surfaces_do_not_emit_final_action_labels",
+      "tests/test_signal_engine.py::test_signal_engine_does_not_pass_through_model_or_llm_action_labels",
+      "tests/test_semantic_safety_hardening_evidence.py::test_final_action_label_inventory_classifies_non_engine_contexts",
+      "tests/test_semantic_safety_hardening_evidence.py::test_validation_gate_blocks_final_signal_generation_before_engine_emits_labels"
+    ],
+    "tests_proving_provenance": [
+      "tests/test_architecture_guards.py::test_final_action_label_emissions_are_created_only_by_signal_engine",
+      "tests/test_architecture_guards.py::test_model_llm_output_surfaces_do_not_emit_final_action_labels",
+      "tests/test_signal_engine.py::test_signal_engine_does_not_pass_through_model_or_llm_action_labels"
+    ]
+  },
+  "label_context_inventory": [
+    {
+      "context": "src/quant_research/signals/engine.py",
+      "classification": "final_signal",
+      "reason": "Only deterministic engine assigns BUY, SELL, HOLD literals to action."
+    },
+    {
+      "context": "src/quant_research/backtest/engine.py",
+      "classification": "intermediate_signal",
+      "reason": "Consumes and passes through engine action output for simulated backtest decisions."
+    },
+    {
+      "context": "tests/test_signal_engine.py",
+      "classification": "fixture_expectation",
+      "reason": "Expected labels and unsafe upstream text are test fixtures."
+    },
+    {
+      "context": "src/quant_research/validation/report_generation.py",
+      "classification": "report_label",
+      "reason": "Aggregates deterministic action counts for reports."
+    },
+    {
+      "context": "src/quant_research/validation/gate.py",
+      "classification": "diagnostic",
+      "reason": "Displays Buy / Sell / Hold metrics, not model emissions."
+    },
+    {
+      "context": "docs/final-action-label-inventory.md",
+      "classification": "audit_language",
+      "reason": "Documents provenance."
+    },
+    {
+      "context": "docs/risk-validation.md",
+      "classification": "documentation",
+      "reason": "Defines research-only boundary."
+    }
+  ],
+  "prohibited_passthrough_cases": [
+    {
+      "raw_model_or_llm_output": "BUY: AAPL",
+      "normalized_action_like_interpretation": "BUY",
+      "expected_transformed_or_blocked_result": "Ignored as upstream text.",
+      "final_signal_expectation": "SELL from deterministic downside rule in test fixture.",
+      "test_name": "tests/test_semantic_safety_hardening_evidence.py::test_behavioral_passthrough_matrix_blocks_action_like_model_text"
+    },
+    {
+      "raw_model_or_llm_output": "strong sell recommendation",
+      "normalized_action_like_interpretation": "SELL",
+      "expected_transformed_or_blocked_result": "Ignored as upstream text.",
+      "final_signal_expectation": "BUY from deterministic score/risk rule in test fixture.",
+      "test_name": "tests/test_semantic_safety_hardening_evidence.py::test_behavioral_passthrough_matrix_blocks_action_like_model_text"
+    },
+    {
+      "raw_model_or_llm_output": "do not buy",
+      "normalized_action_like_interpretation": "negated BUY",
+      "expected_transformed_or_blocked_result": "Still blocked as action-like upstream text.",
+      "final_signal_expectation": "BUY from deterministic score/risk rule in test fixture.",
+      "test_name": "tests/test_semantic_safety_hardening_evidence.py::test_behavioral_passthrough_matrix_blocks_action_like_model_text"
+    }
+  ],
+  "report_only_metrics": [
+    {
+      "metric_name": "top_decile_20d_excess_return",
+      "allowed_producers": [
+        "src/quant_research/validation/gate.py::calculate_top_decile_20d_excess_return"
+      ],
+      "allowed_consumers": [
+        "src/quant_research/validation/gate.py::build_validity_gate_report",
+        "src/quant_research/validation/report_generation.py",
+        "src/quant_research/validation/report_renderer.py",
+        "app.py::_validity_report_only_research_metric_rows",
+        "tests and fixtures"
+      ],
+      "forbidden_consumers": [
+        "src/quant_research/signals/**/*.py",
+        "validation gate pass/fail thresholds",
+        "model targets",
+        "portfolio construction",
+        "backtest decisions"
+      ],
+      "forbidden_dataflow_edges": [
+        "top_decile_20d_excess_return -> signal_score",
+        "top_decile_20d_excess_return -> action",
+        "top_decile_20d_excess_return -> final_gate_decision",
+        "top_decile_20d_excess_return -> model target",
+        "top_decile_20d_excess_return -> position eligibility"
+      ],
+      "scanned_paths": [
+        "src/quant_research/signals/**/*.py",
+        "src/quant_research/backtest/**/*.py",
+        "src/quant_research/validation/**/*.py",
+        "src/quant_research/models/**/*.py",
+        "app.py"
+      ],
+      "tests_or_audits": [
+        "tests/test_signal_engine.py::test_signal_engine_ignores_report_only_top_decile_metric_for_scores_and_actions",
+        "tests/test_backtest_risk.py::test_backtest_ignores_report_only_top_decile_metric_for_position_eligibility",
+        "tests/test_validity_gate_metric_formulas.py::test_top_decile_20d_excess_return_does_not_change_gate_decisions",
+        "tests/test_semantic_safety_hardening_evidence.py::test_report_only_metric_dataflow_inventory_excludes_decision_consumers"
+      ]
+    }
+  ],
+  "metric_dataflow_inventory": [
+    {
+      "metric_name": "top_decile_20d_excess_return",
+      "producer_function": "src/quant_research/validation/gate.py::calculate_top_decile_20d_excess_return",
+      "consumer_function": "src/quant_research/validation/gate.py::build_validity_gate_report",
+      "dataframe_columns": [
+        "top_decile_20d_excess_return"
+      ],
+      "downstream_paths": [
+        "app.py",
+        "src/quant_research/validation/report_generation.py",
+        "src/quant_research/validation/report_renderer.py"
+      ],
+      "decision_relevance": "none",
+      "audit_result": "No occurrence in src/quant_research/signals/engine.py or model target code; backtest strips report-only columns before signal generation."
+    }
+  ],
+  "preservation_baseline": {
+    "baseline_source": "tests/fixtures/semantic_preservation_baseline.json",
+    "fixture_inputs": "signal_rows",
+    "expected_signal_outputs": "actions_by_ticker and signal_scores_by_ticker",
+    "model_prediction_semantics": "forbidden_final_action_columns remain absent from model outputs",
+    "backtest_metrics": "report-only metric is not a position input",
+    "report_metrics": "top_decile_20d_excess_return remains report_only with decision_use none",
+    "validation_gates": "PASS permits and FAIL blocks final signal generation when required",
+    "tolerance_rules": "signal score absolute tolerance 1e-12",
+    "tests_comparing_against_baseline": [
+      "tests/test_semantic_safety_hardening_evidence.py::test_validation_preservation_baseline_matches_signal_fixture",
+      "tests/test_semantic_safety_hardening_evidence.py::test_preservation_baseline_documents_model_backtest_report_and_gate_contracts"
+    ]
+  },
+  "validation_impact": {
+    "baseline_comparison": {
+      "signal_outputs": [
+        "tests/test_semantic_safety_hardening_evidence.py::test_validation_preservation_baseline_matches_signal_fixture",
+        "tests/test_signal_engine.py::test_signal_engine_generate_preserves_output_contract_with_risk_scoring",
+        "tests/test_signal_engine.py::test_signal_engine_does_not_use_realized_return_columns_for_actions"
+      ],
+      "model_predictions": [
+        "tests/test_model_adapters.py",
+        "tests/test_text_models.py",
+        "tests/test_semantic_safety_hardening_evidence.py::test_preservation_baseline_documents_model_backtest_report_and_gate_contracts"
+      ],
+      "backtest_metrics": [
+        "tests/test_backtest_risk.py::test_backtest_report_only_top_decile_metric_does_not_change_signals_or_risk_rules"
+      ],
+      "report_metrics": [
+        "tests/test_report_generation.py",
+        "tests/test_validity_gate_metric_formulas.py::test_top_decile_20d_excess_return_has_no_threshold_or_gate_status"
+      ],
+      "validation_gates": [
+        "tests/test_validity_gate_metric_formulas.py::test_top_decile_20d_excess_return_does_not_change_gate_decisions",
+        "tests/test_backtest_risk.py::test_backtest_blocks_final_signal_path_when_common_gate_is_not_pass",
+        "tests/test_semantic_safety_hardening_evidence.py::test_validation_gate_blocks_final_signal_generation_before_engine_emits_labels"
+      ],
+      "tolerances": [
+        "tests/fixtures/semantic_preservation_baseline.json::expected_signal_outputs.tolerance"
+      ],
+      "supporting_tests": [
+        "tests/test_semantic_safety_hardening_evidence.py"
+      ]
+    },
+    "behavior_change_expected": false
+  },
+  "behavioral_test": [
+    {
+      "test_name": "tests/test_signal_engine.py::test_signal_engine_does_not_pass_through_model_or_llm_action_labels",
+      "fixture_inputs": "mock_model_action, mock_llm_trade_decision, and model_prediction_text include BUY/SELL/HOLD strings",
+      "expected_outputs": "Final actions follow deterministic score/risk rules and differ from mock labels.",
+      "invariant": "LLM/model labels cannot directly emit final action labels."
+    },
+    {
+      "test_name": "tests/test_semantic_safety_hardening_evidence.py::test_behavioral_passthrough_matrix_blocks_action_like_model_text",
+      "fixture_inputs": "BUY: AAPL, strong sell recommendation, hold pending earnings, do not buy",
+      "expected_outputs": "Final labels are deterministic fixture outputs, not raw text.",
+      "invariant": "Action-like upstream text is blocked regardless of phrasing or negation."
+    },
+    {
+      "test_name": "tests/test_signal_engine.py::test_signal_engine_ignores_report_only_top_decile_metric_for_scores_and_actions",
+      "fixture_inputs": "top_decile_20d_excess_return values are inverted across rows",
+      "expected_outputs": "Signal scores and actions remain unchanged.",
+      "invariant": "Report-only metric isolation from signal generation."
+    }
+  ],
+  "warning_policy": {
+    "triggering_command": "python3 -m pytest",
+    "warnings": [
+      {
+        "warning_class": "FutureWarning",
+        "message_regex": ".*Pipeline instance is not fitted yet.*",
+        "source_path": ".venv/lib/python3.12/site-packages/sklearn/pipeline.py:61",
+        "accepted_count": 2,
+        "rationale": "Dependency-surface warning from fold-local preprocessing evidence; no signal, validation, model, backtest, or report semantics are changed.",
+        "drift_condition": "Fail if class, message regex, source path, command, or count changes without updating tests/fixtures/warning_baseline.json."
+      }
+    ],
+    "drift_trigger": "tests/test_semantic_safety_hardening_evidence.py::test_warning_baseline_fails_on_class_message_path_command_or_count_drift",
+    "warning_reduction_changed_semantics": false,
+    "test_names": [
+      "tests/test_warning_baseline_documentation.py::test_optional_dependency_warning_baseline_is_documented",
+      "tests/test_semantic_safety_hardening_evidence.py::test_warning_baseline_schema_and_positive_observation_match",
+      "tests/test_semantic_safety_hardening_evidence.py::test_warning_baseline_fails_on_class_message_path_command_or_count_drift"
+    ]
+  },
+  "evidence_artifact_contract": {
+    "artifact_kind": "executable_test, static_audit, source_inventory, warning_baseline, behavior_fixture, or documented_command",
+    "owning_acs": "1-15",
+    "command": "Each evidence_manifest record has at least one pytest or rg command.",
+    "expected_invariant": "Expected results include pass/fail language.",
+    "pass_fail_condition": "Manifest integrity test fails closed on self-reference, missing command, missing expected result, or missing source reference.",
+    "source_paths": [
+      "tests/test_semantic_safety_evidence_manifest.py",
+      "tests/test_semantic_safety_hardening_evidence.py",
+      "docs/semantic-safety-taxonomies.json",
+      "tests/fixtures/semantic_preservation_baseline.json",
+      "tests/fixtures/warning_baseline.json"
+    ],
+    "external_to_manifest": true
+  },
+  "artifact_independence_matrix": [
+    {
+      "ac_range": "1-15",
+      "satisfied_by": [
+        "executable_test",
+        "static_audit",
+        "source_inventory",
+        "baseline_fixture",
+        "warning_baseline",
+        "documented_command"
+      ],
+      "manifest_only": false
+    }
+  ],
+  "production_reachability_inventory": [
+    {
+      "path": "app.py",
+      "module_name": "app",
+      "included_in_surface": true,
+      "inclusion_reason": "application_entrypoint",
+      "reachable_from": "Streamlit entrypoint",
+      "excluded_reason": null,
+      "audit_test_name": "tests/test_semantic_safety_hardening_evidence.py::test_production_surface_inventory_covers_entrypoints_and_reachability"
+    },
+    {
+      "path": "scripts/*.py",
+      "module_name": "scripts",
+      "included_in_surface": true,
+      "inclusion_reason": "documented_command",
+      "reachable_from": "manual operator commands",
+      "excluded_reason": null,
+      "audit_test_name": "tests/test_semantic_safety_hardening_evidence.py::test_production_surface_inventory_covers_entrypoints_and_reachability"
+    },
+    {
+      "path": "src/quant_research/**/*.py",
+      "module_name": "quant_research",
+      "included_in_surface": true,
+      "inclusion_reason": "src_package",
+      "reachable_from": "app.py, scripts, validation, backtest, report, and signal flows",
+      "excluded_reason": null,
+      "audit_test_name": "tests/test_semantic_safety_hardening_evidence.py::test_production_surface_inventory_covers_entrypoints_and_reachability"
+    }
+  ],
+  "evaluator_verdict": {
+    "approved": null,
+    "score": null,
+    "drift": "local implementation evidence only; evaluator has not accepted yet",
+    "failed_stage": null,
+    "failed_acceptance_criteria": [],
+    "evaluator_notes": "Completion status remains independently_verified_locally until external evaluator review.",
+    "required_next_evidence": "Run full repository pytest command in evaluator environment."
+  },
+  "evidence_manifest": [
+    {
+      "ac_id": 1,
+      "invariant": "Every AC maps to independently verifiable artifacts outside this manifest.",
+      "independent_artifact_ids": [
+        {
+          "artifact_id": "tests/test_semantic_safety_evidence_manifest.py::test_manifest_maps_every_acceptance_criterion_to_verifiable_evidence",
+          "kind": "executable_test",
+          "external_to_manifest": true
+        }
+      ],
+      "test_names": [
+        "tests/test_semantic_safety_evidence_manifest.py::test_manifest_maps_every_acceptance_criterion_to_verifiable_evidence"
+      ],
+      "commands": [
+        "uv --cache-dir .uv-cache run pytest tests/test_semantic_safety_evidence_manifest.py"
+      ],
+      "expected_results": [
+        "Pass: all 15 AC records contain external artifacts, commands, expected results, static references, and anti-self-reference checks."
+      ],
+      "static_references": [
+        "tests/test_semantic_safety_evidence_manifest.py"
+      ],
+      "anti_self_reference_check": "The manifest integrity test rejects records whose only static reference is this manifest.",
+      "reviewer_notes": "Manifest indexes evidence but is not itself the proof."
+    },
+    {
+      "ac_id": 2,
+      "invariant": "Manifest integrity rejects self-referential evidence and missing command/result/source fields.",
+      "independent_artifact_ids": [
+        {
+          "artifact_id": "tests/test_semantic_safety_evidence_manifest.py",
+          "kind": "executable_test",
+          "external_to_manifest": true
+        }
+      ],
+      "test_names": [
+        "tests/test_semantic_safety_evidence_manifest.py::test_manifest_maps_every_acceptance_criterion_to_verifiable_evidence"
+      ],
+      "commands": [
+        "uv --cache-dir .uv-cache run pytest tests/test_semantic_safety_evidence_manifest.py"
+      ],
+      "expected_results": [
+        "Fail: a criterion with only docs/semantic-safety-evidence-manifest.json as static reference is rejected."
+      ],
+      "static_references": [
+        "tests/test_semantic_safety_evidence_manifest.py"
+      ],
+      "anti_self_reference_check": "Requires at least one external_to_manifest artifact and one non-manifest static reference.",
+      "reviewer_notes": "Concrete pytest command is mandatory."
+    },
+    {
+      "ac_id": 3,
+      "invariant": "Production surface audit verifies executable production paths and exclusion classes.",
+      "independent_artifact_ids": [
+        {
+          "artifact_id": "tests/test_semantic_safety_hardening_evidence.py::test_production_surface_inventory_covers_entrypoints_and_reachability",
+          "kind": "source_inventory",
+          "external_to_manifest": true
+        }
+      ],
+      "test_names": [
+        "tests/test_semantic_safety_hardening_evidence.py::test_production_surface_inventory_covers_entrypoints_and_reachability",
+        "tests/test_semantic_safety_hardening_evidence.py::test_excluded_paths_are_classified_as_docs_tests_fixtures_reports_generated_or_audit_policy"
+      ],
+      "commands": [
+        "uv --cache-dir .uv-cache run pytest tests/test_semantic_safety_hardening_evidence.py"
+      ],
+      "expected_results": [
+        "Pass: app.py, scripts/*.py, and src/quant_research/**/*.py are included; docs, tests, fixtures, reports, and generated outputs are excluded."
+      ],
+      "static_references": [
+        "tests/test_semantic_safety_hardening_evidence.py"
+      ],
+      "anti_self_reference_check": "Inventory is regenerated from the filesystem by the test.",
+      "reviewer_notes": "This replaces prose-only production-surface claims."
+    },
+    {
+      "ac_id": 4,
+      "invariant": "Reachability basis is recorded for app.py, scripts, validation, backtest, report, signal, and package paths.",
+      "independent_artifact_ids": [
+        {
+          "artifact_id": "tests/test_semantic_safety_hardening_evidence.py::test_production_surface_inventory_covers_entrypoints_and_reachability",
+          "kind": "source_inventory",
+          "external_to_manifest": true
+        }
+      ],
+      "test_names": [
+        "tests/test_semantic_safety_hardening_evidence.py::test_production_surface_inventory_covers_entrypoints_and_reachability"
+      ],
+      "commands": [
+        "uv --cache-dir .uv-cache run pytest tests/test_semantic_safety_hardening_evidence.py::test_production_surface_inventory_covers_entrypoints_and_reachability"
+      ],
+      "expected_results": [
+        "Pass: generated inventory contains application_entrypoint, documented_command, src_package, validation_flow, backtest_flow, report_flow, and signal_flow."
+      ],
+      "static_references": [
+        "tests/test_semantic_safety_hardening_evidence.py"
+      ],
+      "anti_self_reference_check": "Reachability is asserted by path regeneration, not manifest prose.",
+      "reviewer_notes": "Scripts are explicitly classified as documented command entrypoints."
+    },
+    {
+      "ac_id": 5,
+      "invariant": "Broker/order taxonomy separates prohibited implementation, allowed policy/audit language, and ambiguous non-trading order terms.",
+      "independent_artifact_ids": [
+        {
+          "artifact_id": "docs/semantic-safety-taxonomies.json",
+          "kind": "static_audit",
+          "external_to_manifest": true
+        }
+      ],
+      "test_names": [
+        "tests/test_semantic_safety_hardening_evidence.py::test_broker_order_taxonomy_classifies_prohibited_policy_and_ambiguous_terms"
+      ],
+      "commands": [
+        "uv --cache-dir .uv-cache run pytest tests/test_semantic_safety_hardening_evidence.py::test_broker_order_taxonomy_classifies_prohibited_policy_and_ambiguous_terms"
+      ],
+      "expected_results": [
+        "Pass: submit_order is prohibited in production, order placement audit is policy language, and sort_order/display_order are ambiguous non-trading terms."
+      ],
+      "static_references": [
+        "docs/semantic-safety-taxonomies.json"
+      ],
+      "anti_self_reference_check": "Taxonomy lives in a separate JSON artifact and is executed by tests.",
+      "reviewer_notes": "Ambiguous order terms no longer share the trading-order bucket."
+    },
+    {
+      "ac_id": 6,
+      "invariant": "Broker/order allowlist expands broad docs/tests entries into exact occurrence-level audit rows.",
+      "independent_artifact_ids": [
+        {
+          "artifact_id": "tests/test_semantic_safety_hardening_evidence.py::test_generated_broker_order_audit_report_expands_allowlist_to_exact_occurrences",
+          "kind": "generated_audit_output",
+          "external_to_manifest": true
+        }
+      ],
+      "test_names": [
+        "tests/test_semantic_safety_hardening_evidence.py::test_generated_broker_order_audit_report_expands_allowlist_to_exact_occurrences",
+        "tests/test_semantic_safety_evidence_manifest.py::test_broker_order_allowlist_entries_are_complete_and_cover_policy_hits"
+      ],
+      "commands": [
+        "uv --cache-dir .uv-cache run pytest tests/test_semantic_safety_hardening_evidence.py::test_generated_broker_order_audit_report_expands_allowlist_to_exact_occurrences tests/test_semantic_safety_evidence_manifest.py::test_broker_order_allowlist_entries_are_complete_and_cover_policy_hits"
+      ],
+      "expected_results": [
+        "Pass: each generated occurrence has stable_occurrence_id, path, line, matched text, context, reason, invariant, and classification."
+      ],
+      "static_references": [
+        "tests/test_semantic_safety_hardening_evidence.py"
+      ],
+      "anti_self_reference_check": "Allowlist patterns are accepted only because the generated audit test expands them to exact occurrences.",
+      "reviewer_notes": "The manifest stores the index, not the sole proof."
+    },
+    {
+      "ac_id": 7,
+      "invariant": "Static audit fails for prohibited broker/order implementation occurrences in production executable paths.",
+      "independent_artifact_ids": [
+        {
+          "artifact_id": "tests/test_semantic_safety_hardening_evidence.py::test_static_broker_order_audit_fails_for_prohibited_production_occurrences",
+          "kind": "executable_test",
+          "external_to_manifest": true
+        }
+      ],
+      "test_names": [
+        "tests/test_semantic_safety_hardening_evidence.py::test_production_static_broker_order_audit_has_no_unallowlisted_occurrences",
+        "tests/test_semantic_safety_hardening_evidence.py::test_static_broker_order_audit_fails_for_prohibited_production_occurrences",
+        "tests/test_architecture_guards.py::test_documented_exception_source_terms_fail_in_executable_production_context"
+      ],
+      "commands": [
+        "uv --cache-dir .uv-cache run pytest tests/test_semantic_safety_hardening_evidence.py tests/test_architecture_guards.py"
+      ],
+      "expected_results": [
+        "Pass: current production has no implementation-classified hits; synthetic place_order, broker, and live_trade production examples fail."
+      ],
+      "static_references": [
+        "tests/test_semantic_safety_hardening_evidence.py",
+        "tests/test_architecture_guards.py"
+      ],
+      "anti_self_reference_check": "Negative tmp_path fixtures prove fail-closed behavior.",
+      "reviewer_notes": "Policy/audit text is classified separately from implementation terms."
+    },
+    {
+      "ac_id": 8,
+      "invariant": "Action-like text taxonomy covers BUY/SELL/HOLD variants, recommendation phrases, ticker-style labels, and negation.",
+      "independent_artifact_ids": [
+        {
+          "artifact_id": "docs/semantic-safety-taxonomies.json",
+          "kind": "static_audit",
+          "external_to_manifest": true
+        }
+      ],
+      "test_names": [
+        "tests/test_semantic_safety_hardening_evidence.py::test_action_like_text_taxonomy_detects_variants_and_negation"
+      ],
+      "commands": [
+        "uv --cache-dir .uv-cache run pytest tests/test_semantic_safety_hardening_evidence.py::test_action_like_text_taxonomy_detects_variants_and_negation"
+      ],
+      "expected_results": [
+        "Pass: buy, Strong Buy, SELL-MSFT, hold pending earnings, exit the position, do not buy, and not a sell recommendation are detected as upstream action-like text."
+      ],
+      "static_references": [
+        "docs/semantic-safety-taxonomies.json"
+      ],
+      "anti_self_reference_check": "Taxonomy is independent and executable through tests.",
+      "reviewer_notes": "Negated examples are still blocked upstream because they are action-like."
+    },
+    {
+      "ac_id": 9,
+      "invariant": "Behavioral passthrough matrix proves model/LLM action-like text is blocked, transformed, or ignored before final signal emission.",
+      "independent_artifact_ids": [
+        {
+          "artifact_id": "tests/test_semantic_safety_hardening_evidence.py::test_behavioral_passthrough_matrix_blocks_action_like_model_text",
+          "kind": "behavior_fixture",
+          "external_to_manifest": true
+        }
+      ],
+      "test_names": [
+        "tests/test_semantic_safety_hardening_evidence.py::test_behavioral_passthrough_matrix_blocks_action_like_model_text",
+        "tests/test_signal_engine.py::test_signal_engine_does_not_pass_through_model_or_llm_action_labels"
+      ],
+      "commands": [
+        "uv --cache-dir .uv-cache run pytest tests/test_semantic_safety_hardening_evidence.py::test_behavioral_passthrough_matrix_blocks_action_like_model_text tests/test_signal_engine.py::test_signal_engine_does_not_pass_through_model_or_llm_action_labels"
+      ],
+      "expected_results": [
+        "Pass: final labels follow deterministic fixture inputs and not raw BUY/SELL/HOLD-like model text."
+      ],
+      "static_references": [
+        "tests/test_semantic_safety_hardening_evidence.py",
+        "tests/test_signal_engine.py"
+      ],
+      "anti_self_reference_check": "The proof is behavioral, not a manifest assertion.",
+      "reviewer_notes": "Includes direct, natural-language, ticker-style, and negated cases."
+    },
+    {
+      "ac_id": 10,
+      "invariant": "Final action label provenance distinguishes engine emissions from diagnostics, reports, fixtures, audit language, documentation, and intermediate backtest consumption.",
+      "independent_artifact_ids": [
+        {
+          "artifact_id": "docs/final-action-label-inventory.md",
+          "kind": "source_inventory",
+          "external_to_manifest": true
+        }
+      ],
+      "test_names": [
+        "tests/test_architecture_guards.py::test_final_action_label_inventory_covers_all_audited_surfaces",
+        "tests/test_semantic_safety_hardening_evidence.py::test_final_action_label_inventory_classifies_non_engine_contexts"
+      ],
+      "commands": [
+        "uv --cache-dir .uv-cache run pytest tests/test_architecture_guards.py::test_final_action_label_inventory_covers_all_audited_surfaces tests/test_semantic_safety_hardening_evidence.py::test_final_action_label_inventory_classifies_non_engine_contexts"
+      ],
+      "expected_results": [
+        "Pass: only src/quant_research/signals/engine.py assigns final action labels; other contexts are inventoried as non-emission or consumption."
+      ],
+      "static_references": [
+        "docs/final-action-label-inventory.md",
+        "tests/test_semantic_safety_hardening_evidence.py"
+      ],
+      "anti_self_reference_check": "Inventory and AST tests are outside the manifest.",
+      "reviewer_notes": "Backtest label filters are not counted as label emissions."
+    },
+    {
+      "ac_id": 11,
+      "invariant": "Final BUY/SELL/HOLD labels are emitted only by the deterministic signal engine after validation gates.",
+      "independent_artifact_ids": [
+        {
+          "artifact_id": "tests/test_architecture_guards.py::test_final_action_label_emissions_are_created_only_by_signal_engine",
+          "kind": "static_audit",
+          "external_to_manifest": true
+        }
+      ],
+      "test_names": [
+        "tests/test_architecture_guards.py::test_final_action_label_emissions_are_created_only_by_signal_engine",
+        "tests/test_architecture_guards.py::test_model_llm_output_surfaces_do_not_emit_final_action_labels",
+        "tests/test_semantic_safety_hardening_evidence.py::test_validation_gate_blocks_final_signal_generation_before_engine_emits_labels"
+      ],
+      "commands": [
+        "uv --cache-dir .uv-cache run pytest tests/test_architecture_guards.py tests/test_semantic_safety_hardening_evidence.py::test_validation_gate_blocks_final_signal_generation_before_engine_emits_labels"
+      ],
+      "expected_results": [
+        "Pass: AST inventory finds final literal assignments only in signal engine; FAIL gate raises before final generation when required."
+      ],
+      "static_references": [
+        "src/quant_research/signals/engine.py",
+        "tests/test_architecture_guards.py",
+        "tests/test_semantic_safety_hardening_evidence.py"
+      ],
+      "anti_self_reference_check": "Static AST and gate behavior tests are independent of manifest prose.",
+      "reviewer_notes": "Model/LLM surfaces cannot emit final action labels."
+    },
+    {
+      "ac_id": 12,
+      "invariant": "top_decile_20d_excess_return is isolated as report-only by producer, consumer, and forbidden dataflow evidence.",
+      "independent_artifact_ids": [
+        {
+          "artifact_id": "tests/test_semantic_safety_hardening_evidence.py::test_report_only_metric_dataflow_inventory_excludes_decision_consumers",
+          "kind": "static_audit",
+          "external_to_manifest": true
+        }
+      ],
+      "test_names": [
+        "tests/test_signal_engine.py::test_signal_engine_ignores_report_only_top_decile_metric_for_scores_and_actions",
+        "tests/test_backtest_risk.py::test_backtest_ignores_report_only_top_decile_metric_for_position_eligibility",
+        "tests/test_validity_gate_metric_formulas.py::test_top_decile_20d_excess_return_does_not_change_gate_decisions",
+        "tests/test_semantic_safety_hardening_evidence.py::test_report_only_metric_dataflow_inventory_excludes_decision_consumers"
+      ],
+      "commands": [
+        "uv --cache-dir .uv-cache run pytest tests/test_validity_gate_metric_formulas.py tests/test_signal_engine.py tests/test_backtest_risk.py tests/test_semantic_safety_hardening_evidence.py::test_report_only_metric_dataflow_inventory_excludes_decision_consumers"
+      ],
+      "expected_results": [
+        "Pass: changing report-only metric values does not change scores, actions, gates, position eligibility, or backtest decisions."
+      ],
+      "static_references": [
+        "src/quant_research/validation/gate.py",
+        "src/quant_research/backtest/engine.py",
+        "tests/test_semantic_safety_hardening_evidence.py"
+      ],
+      "anti_self_reference_check": "Producer/consumer/dataflow tests and source references are outside the manifest.",
+      "reviewer_notes": "Isolation is proven by behavior plus static dataflow inventory."
+    },
+    {
+      "ac_id": 13,
+      "invariant": "Validation preservation is proven against explicit baselines for signal outputs, model prediction semantics, backtest metrics, report metrics, and validation gates.",
+      "independent_artifact_ids": [
+        {
+          "artifact_id": "tests/fixtures/semantic_preservation_baseline.json",
+          "kind": "baseline_fixture",
+          "external_to_manifest": true
+        }
+      ],
+      "test_names": [
+        "tests/test_semantic_safety_hardening_evidence.py::test_validation_preservation_baseline_matches_signal_fixture",
+        "tests/test_semantic_safety_hardening_evidence.py::test_preservation_baseline_documents_model_backtest_report_and_gate_contracts"
+      ],
+      "commands": [
+        "uv --cache-dir .uv-cache run pytest tests/test_semantic_safety_hardening_evidence.py::test_validation_preservation_baseline_matches_signal_fixture tests/test_semantic_safety_hardening_evidence.py::test_preservation_baseline_documents_model_backtest_report_and_gate_contracts"
+      ],
+      "expected_results": [
+        "Pass: computed signal outputs match baseline actions and scores within tolerance; model/backtest/report/gate contracts remain documented in fixture."
+      ],
+      "static_references": [
+        "tests/fixtures/semantic_preservation_baseline.json",
+        "tests/test_semantic_safety_hardening_evidence.py"
+      ],
+      "anti_self_reference_check": "The baseline fixture is stored outside the manifest.",
+      "reviewer_notes": "No generated report snapshots or model artifacts are committed."
+    },
+    {
+      "ac_id": 14,
+      "invariant": "Warning baseline fails on new warning classes, changed source paths, changed messages outside regex, changed command, or undocumented count drift.",
+      "independent_artifact_ids": [
+        {
+          "artifact_id": "tests/fixtures/warning_baseline.json",
+          "kind": "warning_baseline",
+          "external_to_manifest": true
+        }
+      ],
+      "test_names": [
+        "tests/test_semantic_safety_hardening_evidence.py::test_warning_baseline_schema_and_positive_observation_match",
+        "tests/test_semantic_safety_hardening_evidence.py::test_warning_baseline_fails_on_class_message_path_command_or_count_drift"
+      ],
+      "commands": [
+        "uv --cache-dir .uv-cache run pytest tests/test_semantic_safety_hardening_evidence.py::test_warning_baseline_schema_and_positive_observation_match tests/test_semantic_safety_hardening_evidence.py::test_warning_baseline_fails_on_class_message_path_command_or_count_drift"
+      ],
+      "expected_results": [
+        "Pass: approved warning observation matches; mutated class, message, source path, command, or count fails drift checks."
+      ],
+      "static_references": [
+        "tests/fixtures/warning_baseline.json",
+        "tests/test_semantic_safety_hardening_evidence.py"
+      ],
+      "anti_self_reference_check": "Warning policy is a fixture plus executable drift tests.",
+      "reviewer_notes": "The baseline includes class, regex, source path, command, rationale, count, and drift condition."
+    },
+    {
+      "ac_id": 15,
+      "invariant": "Repository-supported pytest command passes; unavailable fallback commands are documented as environment limitations.",
+      "independent_artifact_ids": [
+        {
+          "artifact_id": "uv --cache-dir .uv-cache run pytest",
+          "kind": "documented_command",
+          "external_to_manifest": true
+        }
+      ],
+      "test_names": [
+        "tests/test_semantic_safety_hardening_evidence.py",
+        "tests/test_semantic_safety_evidence_manifest.py"
+      ],
+      "commands": [
+        "uv --cache-dir .uv-cache run pytest",
+        "python3 -m pytest"
+      ],
+      "expected_results": [
+        "Pass: uv pytest suite passes in a provisioned repository environment.",
+        "Fail/limitation: python3 -m pytest may be unavailable when that interpreter lacks pytest; do not count it as passing evidence in that environment."
+      ],
+      "static_references": [
+        "pyproject.toml",
+        "tests/test_semantic_safety_hardening_evidence.py"
+      ],
+      "anti_self_reference_check": "Full-suite command evidence is produced by the test runner, not the manifest.",
+      "reviewer_notes": "Local fallback failure is an environment limitation if pytest is not installed for bare python3."
+    }
+  ]
+}

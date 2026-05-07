@@ -9,6 +9,14 @@ from pathlib import Path
 
 import pandas as pd
 
+from quant_research.data.timestamps import (
+    PRICE_TIMEZONE,
+    UTC_TIMEZONE,
+    coalesce_timestamps,
+    date_end_utc,
+    timestamp_utc,
+)
+
 DEFAULT_FILING_EVENT_CACHE_PATH = Path("data/processed") / "sec" / "filing_extraction_cache.jsonl"
 _CACHE_RECORD_VERSION = 1
 _SECTION_LIST_SEPARATOR = "|"
@@ -16,6 +24,26 @@ _FILING_SECTION_RE = re.compile(
     r"(?i)\bitem\s+([0-9]{1,2}(?:\.[0-9]{1,2})?[a-z]?)\b",
 )
 _FILING_SECTION_RISK_HINTS = ("risk", "litigation", "investigation", "bankruptcy", "fraud")
+_US_MARKET_CLOSE_OFFSET = pd.Timedelta(hours=16)
+_FILING_COUNT_COLUMNS = [
+    "sec_8k_count",
+    "sec_10q_count",
+    "sec_10k_count",
+    "sec_form4_count",
+    "sec_risk_flag",
+    "sec_filing_section_count",
+    "sec_filing_risk_section_count",
+]
+_FILING_TEXT_NUMERIC_COLUMNS = [
+    "sec_filing_text_available",
+    "sec_filing_text_length",
+    "sec_filing_risk_keyword_count",
+]
+_FILING_TIMESTAMP_COLUMNS = [
+    "sec_event_timestamp",
+    "sec_availability_timestamp",
+    "sec_source_timestamp",
+]
 
 
 def build_sec_features(
@@ -37,33 +65,30 @@ def build_sec_features(
             filing_extractor,
             filing_cache_path,
         )
+        filing_daily = _align_filing_features_to_calendar(filing_daily, features["date"])
         features = features.merge(filing_daily, on=["date", "ticker"], how="left")
-        for column in [
-            "sec_8k_count",
-            "sec_10q_count",
-            "sec_10k_count",
-            "sec_form4_count",
-            "sec_risk_flag",
-            "sec_filing_section_count",
-            "sec_filing_risk_section_count",
-        ]:
-            features[column] = features[column].fillna(0.0)
+        for column in _FILING_COUNT_COLUMNS:
+            features[column] = pd.to_numeric(features[column], errors="coerce").fillna(0.0)
             features[f"{column}_20d"] = features[column].rolling(20, min_periods=1).sum()
-        for column in [
-            "sec_filing_text_available",
-            "sec_filing_text_length",
-            "sec_filing_risk_keyword_count",
-        ]:
-            features[column] = features[column].fillna(0.0)
+        for column in _FILING_TEXT_NUMERIC_COLUMNS:
+            features[column] = pd.to_numeric(features[column], errors="coerce").fillna(0.0)
             features[f"{column}_20d"] = features[column].rolling(20, min_periods=1).sum()
         features["sec_event_tag"] = features["sec_event_tag"].fillna("none")
-        features["sec_event_confidence"] = features["sec_event_confidence"].fillna(0.0)
+        features["sec_event_confidence"] = pd.to_numeric(
+            features["sec_event_confidence"],
+            errors="coerce",
+        ).fillna(0.0)
         features["sec_summary_ref"] = features["sec_summary_ref"].fillna("")
+        for column in _FILING_TIMESTAMP_COLUMNS:
+            if column in features:
+                features[column] = timestamp_utc(features[column], UTC_TIMEZONE).ffill()
+        if "sec_timezone" in features:
+            features["sec_timezone"] = features["sec_timezone"].fillna(UTC_TIMEZONE)
         features["sec_filing_sections"] = features["sec_filing_sections"].fillna("")
 
         facts = facts_by_ticker.get(ticker, pd.DataFrame())
         features = _merge_fact_features(features, facts)
-        rows.append(features)
+        rows.append(_normalize_sec_feature_dtypes(features))
     if not rows:
         return base
     return pd.concat(rows, ignore_index=True).sort_values(["date", "ticker"]).reset_index(drop=True)
@@ -90,6 +115,10 @@ def _daily_filing_features(
                 "sec_event_tag",
                 "sec_event_confidence",
                 "sec_summary_ref",
+                "sec_event_timestamp",
+                "sec_availability_timestamp",
+                "sec_source_timestamp",
+                "sec_timezone",
                 "sec_filing_text_available",
                 "sec_filing_text_length",
                 "sec_filing_risk_keyword_count",
@@ -99,7 +128,16 @@ def _daily_filing_features(
             ]
         )
     frame = filings.copy()
-    frame["date"] = pd.to_datetime(frame["filing_date"], errors="coerce").dt.normalize()
+    frame = _ensure_filing_timestamp_columns(frame)
+    frame = _drop_filings_with_future_report_events(frame)
+    if frame.empty:
+        return _daily_filing_features(
+            pd.DataFrame(),
+            ticker,
+            filing_extractor=filing_extractor,
+            filing_cache_path=filing_cache_path,
+        )
+    frame["date"] = _filing_feature_date(frame, fallback_column="filing_date")
     frame["ticker"] = ticker
     frame["sec_8k_count"] = (frame["form"] == "8-K").astype(float)
     frame["sec_10q_count"] = (frame["form"] == "10-Q").astype(float)
@@ -190,18 +228,7 @@ def _daily_filing_features(
         _save_filing_extraction_cache(cache, cache_path)
 
     rows: list[dict[str, object]] = []
-    numeric_columns = [
-        "sec_8k_count",
-        "sec_10q_count",
-        "sec_10k_count",
-        "sec_form4_count",
-        "sec_risk_flag",
-        "sec_filing_text_available",
-        "sec_filing_text_length",
-        "sec_filing_risk_keyword_count",
-        "sec_filing_section_count",
-        "sec_filing_risk_section_count",
-    ]
+    numeric_columns = [*_FILING_COUNT_COLUMNS, *_FILING_TEXT_NUMERIC_COLUMNS]
     for (date, grouped_ticker), group in frame.groupby(["date", "ticker"]):
         event_counter = Counter(
             tag for tags in group["sec_event_tag"] for tag in str(tags).split(",") if tag and tag != "none"
@@ -214,9 +241,59 @@ def _daily_filing_features(
             "sec_event_tag": event_counter.most_common(1)[0][0] if event_counter else "none",
             "sec_event_confidence": group["sec_event_confidence"].mean(),
             "sec_summary_ref": group["sec_summary_ref"].iloc[0],
+            "sec_event_timestamp": _timestamp_min(group["event_timestamp"]),
+            "sec_availability_timestamp": _timestamp_max(group["availability_timestamp"]),
+            "sec_source_timestamp": _timestamp_max(group["source_timestamp"]),
+            "sec_timezone": UTC_TIMEZONE,
             "sec_filing_sections": _SECTION_LIST_SEPARATOR.join(section_list),
         }
         rows.append(row)
+    return pd.DataFrame(rows).sort_values(["date", "ticker"])
+
+
+def _align_filing_features_to_calendar(filing_daily: pd.DataFrame, calendar_dates: pd.Series) -> pd.DataFrame:
+    if filing_daily.empty:
+        return filing_daily
+
+    trading_dates = pd.to_datetime(calendar_dates).dropna().drop_duplicates().sort_values().to_numpy()
+    if len(trading_dates) == 0:
+        return filing_daily.iloc[0:0].copy()
+
+    aligned = filing_daily.copy()
+    filing_dates = pd.to_datetime(aligned["date"]).dt.normalize().to_numpy()
+    positions = trading_dates.searchsorted(filing_dates, side="left")
+    valid = positions < len(trading_dates)
+    aligned = aligned.loc[valid].copy()
+    if aligned.empty:
+        return aligned
+    aligned["date"] = pd.to_datetime(trading_dates[positions[valid]]).normalize()
+
+    numeric_columns = [
+        column
+        for column in [*_FILING_COUNT_COLUMNS, *_FILING_TEXT_NUMERIC_COLUMNS]
+        if column in aligned.columns
+    ]
+    rows: list[dict[str, object]] = []
+    for (date, ticker), group in aligned.groupby(["date", "ticker"], sort=True):
+        event_counter = Counter(
+            tag for tags in group["sec_event_tag"] for tag in str(tags).split(",") if tag and tag != "none"
+        )
+        section_list = _merge_filing_sections(group["sec_filing_sections"])
+        rows.append(
+            {
+                "date": date,
+                "ticker": ticker,
+                **{column: group[column].sum() for column in numeric_columns},
+                "sec_event_tag": event_counter.most_common(1)[0][0] if event_counter else "none",
+                "sec_event_confidence": group["sec_event_confidence"].mean(),
+                "sec_summary_ref": group["sec_summary_ref"].iloc[0],
+                "sec_event_timestamp": _timestamp_min(group["sec_event_timestamp"]),
+                "sec_availability_timestamp": _timestamp_max(group["sec_availability_timestamp"]),
+                "sec_source_timestamp": _timestamp_max(group["sec_source_timestamp"]),
+                "sec_timezone": UTC_TIMEZONE,
+                "sec_filing_sections": _SECTION_LIST_SEPARATOR.join(section_list),
+            }
+        )
     return pd.DataFrame(rows).sort_values(["date", "ticker"])
 
 
@@ -228,6 +305,12 @@ def _merge_fact_features(features: pd.DataFrame, facts: pd.DataFrame) -> pd.Data
 
     fact_frame = facts.copy()
     fact_frame["period_end"] = pd.to_datetime(fact_frame["period_end"], errors="coerce").dt.normalize()
+    fact_frame = _ensure_fact_timestamp_columns(fact_frame)
+    fact_frame = _drop_rows_available_before_event(fact_frame)
+    if fact_frame.empty:
+        for column in ["revenue_growth", "net_income_growth", "assets_growth"]:
+            features[column] = 0.0
+        return features
     fact_frame = fact_frame.sort_values("period_end")
     for raw, column in [
         ("revenue", "revenue_growth"),
@@ -238,14 +321,30 @@ def _merge_fact_features(features: pd.DataFrame, facts: pd.DataFrame) -> pd.Data
             fact_frame[column] = fact_frame[raw].pct_change(4).fillna(fact_frame[raw].pct_change()).fillna(0.0)
         else:
             fact_frame[column] = 0.0
+    fact_frame["sec_fact_event_timestamp"] = fact_frame["event_timestamp"]
+    fact_frame["sec_fact_availability_timestamp"] = fact_frame["availability_timestamp"]
+    fact_frame["sec_fact_source_timestamp"] = fact_frame["source_timestamp"]
+    fact_frame["sec_fact_timezone"] = fact_frame["timezone"].fillna(UTC_TIMEZONE)
+    fact_frame["available_date"] = _availability_date(fact_frame, fallback_column="period_end")
     extra_columns = [column for column in fact_frame.columns if column.startswith("sec_frame_")]
     fact_frame = fact_frame[
-        ["period_end", "revenue_growth", "net_income_growth", "assets_growth", *extra_columns]
+        [
+            "available_date",
+            "revenue_growth",
+            "net_income_growth",
+            "assets_growth",
+            "sec_fact_event_timestamp",
+            "sec_fact_availability_timestamp",
+            "sec_fact_source_timestamp",
+            "sec_fact_timezone",
+            *extra_columns,
+        ]
     ]
+    fact_frame = fact_frame.sort_values(["available_date"]).dropna(subset=["available_date"])
 
     merged = pd.merge_asof(
         features.sort_values("date"),
-        fact_frame.rename(columns={"period_end": "date"}).sort_values("date"),
+        fact_frame.rename(columns={"available_date": "date"}).sort_values("date"),
         on="date",
         direction="backward",
     )
@@ -253,7 +352,165 @@ def _merge_fact_features(features: pd.DataFrame, facts: pd.DataFrame) -> pd.Data
         merged[column] = merged[column].fillna(0.0)
     for column in [column for column in fact_frame.columns if column.startswith("sec_frame_")]:
         merged[column] = merged[column].ffill().fillna(0.0)
+    for column in ["sec_fact_event_timestamp", "sec_fact_availability_timestamp", "sec_fact_source_timestamp"]:
+        if column in merged:
+            merged[column] = merged[column].ffill()
+    if "sec_fact_timezone" in merged:
+        merged["sec_fact_timezone"] = merged["sec_fact_timezone"].ffill().fillna(UTC_TIMEZONE)
     return merged
+
+
+def _normalize_sec_feature_dtypes(features: pd.DataFrame) -> pd.DataFrame:
+    normalized = features.copy()
+    for column in [*_FILING_COUNT_COLUMNS, *_FILING_TEXT_NUMERIC_COLUMNS, "sec_event_confidence"]:
+        if column in normalized:
+            normalized[column] = pd.to_numeric(normalized[column], errors="coerce").fillna(0.0)
+    for column in _FILING_TIMESTAMP_COLUMNS:
+        if column in normalized:
+            normalized[column] = timestamp_utc(normalized[column], UTC_TIMEZONE)
+    return normalized
+
+
+def _ensure_filing_timestamp_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    normalized = frame.copy()
+    if "filing_date" in normalized:
+        filing_timestamp = date_end_utc(normalized["filing_date"], UTC_TIMEZONE)
+    else:
+        filing_timestamp = pd.Series(pd.NaT, index=normalized.index, dtype="datetime64[ns, UTC]")
+    if "source_timestamp" not in normalized:
+        normalized["source_timestamp"] = coalesce_timestamps(
+            _coalesced_timestamp_columns(
+                normalized,
+                (
+                    "public_timestamp",
+                    "publication_timestamp",
+                    "published_at",
+                    "public_date",
+                    "acceptance_datetime",
+                ),
+            ),
+            filing_timestamp,
+        )
+    if "event_timestamp" not in normalized:
+        if "report_date" in normalized:
+            report_timestamp = date_end_utc(normalized["report_date"], UTC_TIMEZONE)
+        else:
+            report_timestamp = pd.Series(pd.NaT, index=normalized.index, dtype="datetime64[ns, UTC]")
+        normalized["event_timestamp"] = coalesce_timestamps(
+            report_timestamp,
+            normalized["source_timestamp"],
+            filing_timestamp,
+        )
+    if "availability_timestamp" not in normalized:
+        normalized["availability_timestamp"] = coalesce_timestamps(
+            _coalesced_timestamp_columns(
+                normalized,
+                (
+                    "collected_at",
+                    "collection_timestamp",
+                    "retrieved_at",
+                    "downloaded_at",
+                    "available_at",
+                    "available_timestamp",
+                ),
+            ),
+            normalized["source_timestamp"],
+            filing_timestamp,
+        )
+    if "timezone" not in normalized:
+        normalized["timezone"] = UTC_TIMEZONE
+    return normalized
+
+
+def _coalesced_timestamp_columns(frame: pd.DataFrame, columns: tuple[str, ...]) -> pd.Series:
+    values = [
+        timestamp_utc(frame[column], UTC_TIMEZONE)
+        for column in columns
+        if column in frame
+    ]
+    if not values:
+        return pd.Series(pd.NaT, index=frame.index, dtype="datetime64[ns, UTC]")
+    return coalesce_timestamps(*values)
+
+
+def _drop_filings_with_future_report_events(frame: pd.DataFrame) -> pd.DataFrame:
+    if "report_date" not in frame:
+        return frame
+    report_event_timestamp = date_end_utc(frame["report_date"], UTC_TIMEZONE)
+    availability_timestamp = timestamp_utc(frame["availability_timestamp"], UTC_TIMEZONE)
+    keep = (
+        report_event_timestamp.isna()
+        | availability_timestamp.isna()
+        | (availability_timestamp >= report_event_timestamp)
+    )
+    return frame.loc[keep].copy()
+
+
+def _ensure_fact_timestamp_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    normalized = frame.copy()
+    if "event_timestamp" not in normalized:
+        normalized["event_timestamp"] = date_end_utc(normalized["period_end"], UTC_TIMEZONE)
+    if "source_timestamp" not in normalized:
+        if "filed" in normalized:
+            normalized["source_timestamp"] = date_end_utc(normalized["filed"], UTC_TIMEZONE)
+        else:
+            normalized["source_timestamp"] = pd.Series(pd.NaT, index=normalized.index, dtype="datetime64[ns, UTC]")
+    if "availability_timestamp" not in normalized:
+        normalized["availability_timestamp"] = coalesce_timestamps(
+            normalized["source_timestamp"],
+            normalized["event_timestamp"],
+        )
+    if "timezone" not in normalized:
+        normalized["timezone"] = UTC_TIMEZONE
+    return normalized
+
+
+def _drop_rows_available_before_event(frame: pd.DataFrame) -> pd.DataFrame:
+    event_timestamp = timestamp_utc(frame["event_timestamp"], UTC_TIMEZONE)
+    availability_timestamp = timestamp_utc(frame["availability_timestamp"], UTC_TIMEZONE)
+    keep = event_timestamp.isna() | availability_timestamp.isna() | (availability_timestamp >= event_timestamp)
+    return frame.loc[keep].copy()
+
+
+def _availability_date(frame: pd.DataFrame, fallback_column: str) -> pd.Series:
+    if "availability_timestamp" in frame:
+        availability = timestamp_utc(frame["availability_timestamp"], UTC_TIMEZONE)
+    else:
+        availability = pd.Series(pd.NaT, index=frame.index, dtype="datetime64[ns, UTC]")
+    if fallback_column in frame:
+        fallback = date_end_utc(frame[fallback_column], UTC_TIMEZONE)
+        availability = coalesce_timestamps(availability, fallback)
+    return availability.dt.tz_convert(UTC_TIMEZONE).dt.tz_localize(None).dt.normalize()
+
+
+def _filing_feature_date(frame: pd.DataFrame, fallback_column: str) -> pd.Series:
+    if "availability_timestamp" in frame:
+        availability = timestamp_utc(frame["availability_timestamp"], UTC_TIMEZONE)
+    else:
+        availability = pd.Series(pd.NaT, index=frame.index, dtype="datetime64[ns, UTC]")
+    if fallback_column in frame:
+        fallback = date_end_utc(frame[fallback_column], UTC_TIMEZONE)
+        availability = coalesce_timestamps(availability, fallback)
+
+    local_availability = availability.dt.tz_convert(PRICE_TIMEZONE)
+    local_midnight = local_availability.dt.normalize()
+    local_dates = local_midnight.dt.tz_localize(None)
+    after_close = (local_availability - local_midnight) > _US_MARKET_CLOSE_OFFSET
+    return local_dates.mask(after_close.fillna(False), local_dates + pd.offsets.BDay(1)).dt.normalize()
+
+
+def _timestamp_max(values: pd.Series) -> pd.Timestamp:
+    normalized = timestamp_utc(values.dropna(), UTC_TIMEZONE)
+    if normalized.empty:
+        return pd.NaT
+    return normalized.max()
+
+
+def _timestamp_min(values: pd.Series) -> pd.Timestamp:
+    normalized = timestamp_utc(values.dropna(), UTC_TIMEZONE)
+    if normalized.empty:
+        return pd.NaT
+    return normalized.min()
 
 
 def _load_filing_extraction_cache(cache_path: Path) -> dict[str, dict[str, object]]:

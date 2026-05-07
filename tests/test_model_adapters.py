@@ -108,6 +108,27 @@ def test_chronos2_local_inference_normalizes_pipeline_output(monkeypatch) -> Non
     assert latest.loc["MSFT", "chronos_upside_quantile"] == 0.05
 
 
+def test_chronos2_local_inference_falls_back_to_proxy_when_pipeline_load_fails(monkeypatch) -> None:
+    frame = pd.DataFrame(
+        {
+            "date": pd.date_range("2026-01-01", periods=8, freq="D"),
+            "ticker": ["AAPL"] * 8,
+            "return_1": [0.001] * 8,
+            "return_20": [0.02] * 8,
+            "volatility_20": [0.03] * 8,
+        }
+    )
+    adapter = Chronos2Adapter()
+    monkeypatch.setattr(adapter, "_load_pipeline", lambda: (_ for _ in ()).throw(RuntimeError("offline")))
+
+    output = adapter.add_local_forecasts(frame, min_context=5, max_inference_windows=1)
+    proxy = adapter.add_proxy_forecasts(frame)
+
+    pd.testing.assert_series_equal(output["chronos_expected_return"], proxy["chronos_expected_return"])
+    pd.testing.assert_series_equal(output["chronos_downside_quantile"], proxy["chronos_downside_quantile"])
+    pd.testing.assert_series_equal(output["chronos_upside_quantile"], proxy["chronos_upside_quantile"])
+
+
 def test_granite_ttm_proxy_forecast_columns_are_added() -> None:
     frame = pd.DataFrame(
         {
@@ -172,6 +193,26 @@ def test_granite_ttm_local_inference_uses_forecaster_contract(monkeypatch) -> No
 
     assert latest["granite_ttm_expected_return"] == 0.0123
     assert latest["granite_ttm_confidence"] == 1.0
+
+
+def test_granite_ttm_local_inference_falls_back_to_proxy_when_forecaster_fails(monkeypatch) -> None:
+    frame = pd.DataFrame(
+        {
+            "date": pd.date_range("2026-01-01", periods=8, freq="D"),
+            "ticker": ["AAPL"] * 8,
+            "return_1": [0.001] * 8,
+            "return_5": [0.01] * 8,
+            "high_low_range": [0.02] * 8,
+        }
+    )
+    adapter = GraniteTTMAdapter()
+    monkeypatch.setattr(adapter, "_load_forecaster", lambda: (_ for _ in ()).throw(RuntimeError("offline")))
+
+    output = adapter.add_local_forecasts(frame, min_context=5, max_inference_windows=1)
+    proxy = adapter.add_proxy_forecasts(frame)
+
+    pd.testing.assert_series_equal(output["granite_ttm_expected_return"], proxy["granite_ttm_expected_return"])
+    pd.testing.assert_series_equal(output["granite_ttm_confidence"], proxy["granite_ttm_confidence"])
 
 
 def test_tabular_model_fallback_schema_when_lightgbm_is_absent(monkeypatch) -> None:
@@ -327,6 +368,31 @@ def test_tabular_model_returns_calibration_metadata_and_raw_predictions() -> Non
     assert float(model.training_metadata["winsorized_feature_count"]) >= 0
 
 
+def test_tabular_pipeline_fitted_marker_does_not_change_prediction_outputs() -> None:
+    train = pd.DataFrame(
+        {
+            "date": pd.date_range("2026-01-01", periods=80, freq="D"),
+            "ticker": ["AAPL"] * 40 + ["MSFT"] * 40,
+            "volatility_20": [0.01 + i * 0.0002 for i in range(80)],
+            "return_5": [0.001 * (i % 9 - 4) for i in range(80)],
+            "return_20": [0.002 * (i % 7 - 3) for i in range(80)],
+            "forward_return_1": [0.001 * (i % 5 - 2) for i in range(80)],
+        }
+    )
+    model = TabularReturnModel(model_name="hist_gradient", random_state=17).fit(train)
+    final_estimator = model.fitted_model.steps[-1][1]
+
+    with_marker = model.predict(train.tail(12))
+    assert getattr(final_estimator, "_quant_research_fitted_") is True
+
+    delattr(final_estimator, "_quant_research_fitted_")
+    without_marker = model.predict(train.tail(12))
+
+    pd.testing.assert_frame_equal(with_marker, without_marker)
+    assert model.training_metadata["actual_model_name"] == "HistGradientBoostingRegressor"
+    assert model.training_metadata["fit_reason"] == "model_fitted"
+
+
 def test_finbert_uses_no_network_fallback_contract(monkeypatch) -> None:
     fake_transformers = types.ModuleType("transformers")
 
@@ -351,6 +417,42 @@ def test_finbert_uses_no_network_fallback_contract(monkeypatch) -> None:
     assert isinstance(result["confidence"], float)
     assert isinstance(result["negative_flag"], bool)
     assert isinstance(result["risk_flag"], bool)
+
+
+def test_finbert_normal_pipeline_output_uses_structured_scores(monkeypatch) -> None:
+    fake_transformers = types.ModuleType("transformers")
+
+    class FakeFinBERTPipeline:
+        def __call__(self, text: str, **kwargs: object) -> list[list[dict[str, object]]]:
+            assert "stronger guidance" in text
+            assert kwargs["truncation"] is True
+            return [
+                [
+                    {"label": "positive", "score": 0.81},
+                    {"label": "neutral", "score": 0.14},
+                    {"label": "negative", "score": 0.05},
+                ]
+            ]
+
+    def fake_pipeline(*args: object, **kwargs: object) -> FakeFinBERTPipeline:
+        assert args == ("text-classification",)
+        assert kwargs["model"] == "ProsusAI/finbert"
+        assert kwargs["top_k"] is None
+        return FakeFinBERTPipeline()
+
+    fake_transformers.pipeline = fake_pipeline
+    monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+
+    result = FinBERTSentimentAnalyzer().score("Company issued stronger guidance after demand improved.")
+
+    assert result == {
+        "sentiment_score": 0.76,
+        "negative_flag": False,
+        "label": "positive",
+        "confidence": 0.81,
+        "event_tag": "",
+        "risk_flag": False,
+    }
 
 
 def test_filing_and_fingpt_extractor_follow_structured_contract_without_services() -> None:

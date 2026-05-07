@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "baseline_source": "tests/fixtures/semantic_preservation_baseline.json",
+  "fixture_inputs": {
+    "signal_rows": [
+      {
+        "date": "2026-01-01",
+        "ticker": "BASE_BUY",
+        "expected_return": 0.05,
+        "predicted_volatility": 0.01,
+        "downside_quantile": 0.0,
+        "text_risk_score": 0.0,
+        "sec_risk_flag": 0.0,
+        "sec_risk_flag_20d": 0.0,
+        "news_negative_ratio": 0.0,
+        "liquidity_score": 20.0,
+        "model_confidence": 1.0
+      },
+      {
+        "date": "2026-01-01",
+        "ticker": "BASE_SELL",
+        "expected_return": 0.05,
+        "predicted_volatility": 0.01,
+        "downside_quantile": -0.10,
+        "text_risk_score": 0.0,
+        "sec_risk_flag": 0.0,
+        "sec_risk_flag_20d": 0.0,
+        "news_negative_ratio": 0.0,
+        "liquidity_score": 20.0,
+        "model_confidence": 1.0
+      },
+      {
+        "date": "2026-01-01",
+        "ticker": "BASE_HOLD",
+        "expected_return": 0.0001,
+        "predicted_volatility": 0.01,
+        "downside_quantile": 0.0,
+        "text_risk_score": 0.0,
+        "sec_risk_flag": 0.0,
+        "sec_risk_flag_20d": 0.0,
+        "news_negative_ratio": 0.0,
+        "liquidity_score": 20.0,
+        "model_confidence": 1.0
+      }
+    ]
+  },
+  "expected_signal_outputs": {
+    "actions_by_ticker": {
+      "BASE_BUY": "BUY",
+      "BASE_SELL": "SELL",
+      "BASE_HOLD": "HOLD"
+    },
+    "signal_scores_by_ticker": {
+      "BASE_BUY": 0.0503,
+      "BASE_SELL": 0.0403,
+      "BASE_HOLD": 0.0004
+    },
+    "tolerance": 1e-12
+  },
+  "model_prediction_semantics": {
+    "allowed_feature_columns": [
+      "expected_return",
+      "predicted_volatility",
+      "downside_quantile",
+      "model_confidence",
+      "text_risk_score",
+      "sec_risk_flag"
+    ],
+    "forbidden_final_action_columns": [
+      "action",
+      "trade_decision",
+      "final_signal",
+      "signal_label"
+    ]
+  },
+  "validation_gates": {
+    "passing_gate": {
+      "final_gate_decision": "PASS",
+      "final_status": "pass"
+    },
+    "failing_gate": {
+      "final_gate_decision": "FAIL",
+      "final_status": "fail"
+    }
+  },
+  "backtest_metrics": {
+    "report_only_metric_is_not_position_input": "top_decile_20d_excess_return"
+  },
+  "report_metrics": {
+    "top_decile_20d_excess_return_status": "report_only",
+    "top_decile_20d_excess_return_decision_use": "none"
+  },
+  "supporting_tests": [
+    "tests/test_semantic_safety_hardening_evidence.py::test_validation_preservation_baseline_matches_signal_fixture",
+    "tests/test_semantic_safety_hardening_evidence.py::test_preservation_baseline_documents_model_backtest_report_and_gate_contracts"
+  ]
+}

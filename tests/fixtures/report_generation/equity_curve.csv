@@ -1,0 +1,3 @@
+date,cost_adjusted_return,benchmark_return,equal_weight_return,turnover,position_count,max_position_weight,max_sector_exposure,risk_stop_active
+2024-12-02,0.03,0.01,0.012,0.15,18,0.09,0.18,false
+2025-02-28,0.04,0.02,0.018,0.21,20,0.10,0.22,false

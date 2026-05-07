@@ -11,6 +11,8 @@ from urllib.parse import quote_plus
 import pandas as pd
 import requests
 
+from quant_research.data.timestamps import UTC_TIMEZONE
+
 
 @dataclass(frozen=True)
 class NewsItem:
@@ -23,6 +25,27 @@ class NewsItem:
     content: str = ""
     full_text: str = ""
     body_text: str = ""
+    collected_at: pd.Timestamp | None = None
+    event_timestamp: pd.Timestamp | None = None
+    availability_timestamp: pd.Timestamp | None = None
+    source_timestamp: pd.Timestamp | None = None
+    timezone: str = UTC_TIMEZONE
+
+    def __post_init__(self) -> None:
+        source_timestamp = _standard_news_timestamp(self.source_timestamp, self.published_at)
+        collected_at = _standard_news_timestamp(
+            self.collected_at,
+            self.availability_timestamp if self.availability_timestamp is not None else source_timestamp,
+        )
+        event_timestamp = _standard_news_timestamp(self.event_timestamp, source_timestamp)
+        availability_timestamp = _standard_news_timestamp(self.availability_timestamp, collected_at)
+        if pd.isna(collected_at):
+            collected_at = availability_timestamp
+        object.__setattr__(self, "collected_at", collected_at)
+        object.__setattr__(self, "event_timestamp", event_timestamp)
+        object.__setattr__(self, "availability_timestamp", availability_timestamp)
+        object.__setattr__(self, "source_timestamp", source_timestamp)
+        object.__setattr__(self, "timezone", self.timezone or UTC_TIMEZONE)
 
 
 class NewsProvider(Protocol):
@@ -48,10 +71,11 @@ class SyntheticNewsProvider:
         for ticker_idx, ticker in enumerate(tickers):
             for offset, day in enumerate(dates[::10]):
                 text = self.seed_texts[(ticker_idx + offset) % len(self.seed_texts)]
+                published = pd.Timestamp(day)
                 items.append(
                     NewsItem(
                         ticker=ticker,
-                        published_at=pd.Timestamp(day),
+                        published_at=published,
                         title=f"{ticker} {text}",
                         source="synthetic",
                         url=f"synthetic://{ticker}/{day.date()}",
@@ -59,6 +83,8 @@ class SyntheticNewsProvider:
                         content=text,
                         full_text="",
                         body_text="",
+                        source_timestamp=published,
+                        availability_timestamp=published,
                     )
                 )
         return items
@@ -87,6 +113,7 @@ class YFinanceNewsProvider:
                 provider = content.get("provider", {}) if isinstance(content.get("provider"), dict) else {}
                 source = provider.get("displayName") or raw.get("publisher") or "yfinance"
                 published_raw = content.get("pubDate") or raw.get("providerPublishTime") or end_ts
+                source_timestamp = _parse_news_source_timestamp(published_raw)
                 published = _parse_news_timestamp(published_raw)
                 if pd.isna(published) or published < start_ts or published > end_ts.normalize():
                     continue
@@ -110,6 +137,8 @@ class YFinanceNewsProvider:
                         content=content_text if not full_text else full_text,
                         full_text=full_text,
                         body_text=full_text,
+                        source_timestamp=source_timestamp,
+                        availability_timestamp=source_timestamp,
                     )
                 )
         return items
@@ -139,6 +168,7 @@ class GDELTNewsProvider:
                 article_url = article.get("url", "")
                 full_text = _fetch_full_text(article_url, self.timeout_seconds, self.max_full_text_chars)
                 summary = str(article_title)
+                source_timestamp = _parse_news_source_timestamp(article.get("seendate", end_ts))
                 items.append(
                     NewsItem(
                         ticker=ticker,
@@ -150,15 +180,146 @@ class GDELTNewsProvider:
                         content=summary if not full_text else full_text,
                         full_text=full_text,
                         body_text=full_text,
+                        source_timestamp=source_timestamp,
+                        availability_timestamp=source_timestamp,
                     )
                 )
         return items
+
+
+@dataclass
+class LocalNewsProvider:
+    """Reads pre-downloaded news items from a JSONL file (no network calls)."""
+
+    data_path: str = "data/raw/news_items.jsonl"
+
+    def get_news(self, tickers: list[str], start: str | date, end: str | date) -> list[NewsItem]:
+        from pathlib import Path
+
+        path = Path(self.data_path)
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Local news data not found at '{path}'. "
+                "Run: uv run python scripts/download_backtest_data.py"
+            )
+        start_ts = pd.Timestamp(start).normalize()
+        end_ts = pd.Timestamp(end).normalize()
+        ticker_set = set(tickers) if tickers else None
+        items: list[NewsItem] = []
+        with open(path) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if ticker_set and record.get("ticker") not in ticker_set:
+                    continue
+                published = _parse_news_timestamp(record.get("published_at", ""))
+                if pd.isna(published) or published < start_ts or published > end_ts:
+                    continue
+                source_timestamp = _parse_news_source_timestamp(
+                    record.get("source_timestamp")
+                    or record.get("availability_timestamp")
+                    or record.get("published_at", "")
+                )
+                availability_timestamp = _parse_news_source_timestamp(
+                    record.get("availability_timestamp")
+                    or record.get("collected_at")
+                    or record.get("source_timestamp")
+                    or record.get("published_at", "")
+                )
+                items.append(
+                    NewsItem(
+                        ticker=record.get("ticker", ""),
+                        published_at=published,
+                        title=record.get("title", ""),
+                        source=record.get("source", ""),
+                        url=record.get("url", ""),
+                        summary=record.get("summary", ""),
+                        content=record.get("content", ""),
+                        full_text=record.get("full_text", ""),
+                        body_text=record.get("body_text", ""),
+                        collected_at=_parse_news_source_timestamp(record.get("collected_at", "")),
+                        event_timestamp=_parse_news_source_timestamp(record.get("event_timestamp", "")),
+                        source_timestamp=source_timestamp,
+                        availability_timestamp=availability_timestamp,
+                        timezone=record.get("timezone", UTC_TIMEZONE) or UTC_TIMEZONE,
+                    )
+                )
+        return sorted(items, key=lambda item: (item.ticker, item.published_at, item.collected_at))
 
 
 def _parse_news_timestamp(value: object) -> pd.Timestamp:
     if isinstance(value, int | float):
         return pd.to_datetime(value, unit="s").tz_localize(None).normalize()
     return pd.to_datetime(value, errors="coerce").tz_localize(None).normalize()
+
+
+def _parse_news_source_timestamp(value: object) -> pd.Timestamp:
+    if isinstance(value, int | float):
+        parsed = pd.to_datetime(value, unit="s", errors="coerce")
+    else:
+        parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return pd.NaT
+    if isinstance(parsed, pd.Timestamp) and parsed.tzinfo is not None:
+        return parsed.tz_convert(UTC_TIMEZONE)
+    return pd.Timestamp(parsed).tz_localize(UTC_TIMEZONE)
+
+
+def _standard_news_timestamp(value: object, fallback: object) -> pd.Timestamp:
+    parsed = _parse_news_source_timestamp(value)
+    if pd.isna(parsed):
+        parsed = _parse_news_source_timestamp(fallback)
+    if pd.isna(parsed):
+        return pd.NaT
+    return parsed
+
+
+def news_items_to_frame(news_items: list[NewsItem]) -> pd.DataFrame:
+    """Return provider output as rows with the canonical timestamp columns."""
+    rows = [
+        {
+            "ticker": item.ticker,
+            "published_at": item.published_at,
+            "title": item.title,
+            "source": item.source,
+            "url": item.url,
+            "summary": item.summary,
+            "content": item.content,
+            "full_text": item.full_text,
+            "body_text": item.body_text,
+            "collected_at": item.collected_at,
+            "event_timestamp": item.event_timestamp,
+            "availability_timestamp": item.availability_timestamp,
+            "source_timestamp": item.source_timestamp,
+            "timezone": item.timezone,
+        }
+        for item in news_items
+    ]
+    if rows:
+        return pd.DataFrame(rows)
+    return pd.DataFrame(
+        columns=[
+            "ticker",
+            "published_at",
+            "title",
+            "source",
+            "url",
+            "summary",
+            "content",
+            "full_text",
+            "body_text",
+            "collected_at",
+            "event_timestamp",
+            "availability_timestamp",
+            "source_timestamp",
+            "timezone",
+        ]
+    )
 
 
 def _fetch_full_text(url: str, timeout_seconds: float, max_chars: int) -> str:
