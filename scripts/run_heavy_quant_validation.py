@@ -2,16 +2,13 @@ from __future__ import annotations
 
 # ruff: noqa: E402
 import argparse
-import contextlib
 import dataclasses
 import hashlib
 import json
 import os
-import platform
-import subprocess
 import sys
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -226,23 +223,6 @@ def apply_resource_profile(profile: str) -> dict[str, str]:
     for key, value in values.items():
         os.environ[key] = value
     return values
-
-
-@contextlib.contextmanager
-def keep_awake(enabled: bool) -> Iterable[None]:
-    process: subprocess.Popen[bytes] | None = None
-    if enabled and platform.system() == "Darwin":
-        process = subprocess.Popen(["caffeinate", "-dims"])
-    try:
-        yield
-    finally:
-        if process is not None:
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
 
 
 def ensure_market_data(
@@ -737,29 +717,28 @@ def run_heavy_quant_validation(args: argparse.Namespace) -> dict[str, str]:
     run_id = args.run_id or f"heavy_quant_validation_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     raw_dir = Path(args.raw_data_dir)
     output_dir = Path(args.report_dir) / run_id
-    with keep_awake(args.keep_awake):
-        backfill = run_backfill(
-            raw_dir,
-            request,
-            refresh=args.refresh_data,
-            user_agent=args.sec_user_agent,
-        )
-        config = build_pipeline_config(
-            request,
-            raw_dir=raw_dir,
-            model_mode=args.model_mode,
-            runtime=args.runtime,
-        )
-        result = run_research_pipeline(config)
-        output_manifest = save_outputs(result, output_dir, config)
-        checks = build_spec_checks(result, output_manifest, backfill)
-        heavy_outputs = write_heavy_report(
-            output_dir,
-            checks,
-            run_id=run_id,
-            backfill_results=backfill,
-            output_manifest=output_manifest,
-        )
+    backfill = run_backfill(
+        raw_dir,
+        request,
+        refresh=args.refresh_data,
+        user_agent=args.sec_user_agent,
+    )
+    config = build_pipeline_config(
+        request,
+        raw_dir=raw_dir,
+        model_mode=args.model_mode,
+        runtime=args.runtime,
+    )
+    result = run_research_pipeline(config)
+    output_manifest = save_outputs(result, output_dir, config)
+    checks = build_spec_checks(result, output_manifest, backfill)
+    heavy_outputs = write_heavy_report(
+        output_dir,
+        checks,
+        run_id=run_id,
+        backfill_results=backfill,
+        output_manifest=output_manifest,
+    )
     print(f"Heavy quant validation report: {heavy_outputs['final_report_markdown']}")
     return heavy_outputs
 
@@ -783,7 +762,6 @@ def _parse_args() -> argparse.Namespace:
         choices=["conservative", "balanced", "aggressive"],
         default="aggressive",
     )
-    parser.add_argument("--keep-awake", action="store_true")
     parser.add_argument("--refresh-data", action="store_true")
     parser.add_argument("--skip-news", action="store_true")
     parser.add_argument("--skip-sec", action="store_true")
