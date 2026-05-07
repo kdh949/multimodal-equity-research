@@ -14,7 +14,10 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from quant_research.config import DEFAULT_BENCHMARK_TICKER, DEFAULT_TICKERS
-from quant_research.dashboard import build_beginner_research_dashboard
+from quant_research.dashboard import (
+    build_beginner_decision_coach_report,
+    build_beginner_research_dashboard,
+)
 from quant_research.dashboard.streamlit import render_beginner_overview
 from quant_research.pipeline import PipelineConfig, run_research_pipeline
 from quant_research.signals.engine import (
@@ -991,6 +994,41 @@ def _render_walk_forward_periods_and_oos_summary(
     )
 
 
+def _build_beginner_report_bundle(
+    result: object,
+    focus_ticker: str,
+    config: PipelineConfig,
+) -> SimpleNamespace:
+    validity_report = build_validity_gate_report(
+        result.predictions,
+        result.validation_summary,
+        result.backtest.equity_curve,
+        result.backtest.metrics,
+        ablation_summary=result.ablation_summary,
+        config=config,
+        benchmark_return_series=result.benchmark_return_series,
+        equal_weight_baseline_return_series=result.equal_weight_baseline_return_series,
+        baseline_comparison_inputs=result.baseline_comparison_inputs or None,
+    )
+    decision_coach_report = build_beginner_decision_coach_report(
+        result,
+        focus_ticker,
+        validity_report,
+        config,
+    )
+    dashboard = build_beginner_research_dashboard(
+        result,
+        focus_ticker,
+        config,
+        decision_coach_report=decision_coach_report,
+    )
+    return SimpleNamespace(
+        dashboard=dashboard,
+        decision_coach_report=decision_coach_report,
+        validity_report=validity_report,
+    )
+
+
 def _transaction_cost_sensitivity_result(result: object, config: PipelineConfig) -> object | None:
     sensitivity_result = getattr(result, "transaction_cost_sensitivity", None)
     if sensitivity_result is not None:
@@ -1381,7 +1419,7 @@ def main() -> None:
         page_title="Quant Research",
         page_icon="Q",
         layout="wide",
-        initial_sidebar_state="expanded",
+        initial_sidebar_state="collapsed",
     )
 
     st.title("Quant Research")
@@ -1648,18 +1686,10 @@ def main() -> None:
         st.stop()
 
     metrics = result.backtest.metrics
-    dashboard = build_beginner_research_dashboard(result, focus_ticker, config)
-    validity_report = build_validity_gate_report(
-        result.predictions,
-        result.validation_summary,
-        result.backtest.equity_curve,
-        result.backtest.metrics,
-        ablation_summary=result.ablation_summary,
-        config=config,
-        benchmark_return_series=result.benchmark_return_series,
-        equal_weight_baseline_return_series=result.equal_weight_baseline_return_series,
-        baseline_comparison_inputs=result.baseline_comparison_inputs or None,
-    )
+    beginner_reports = _build_beginner_report_bundle(result, focus_ticker, config)
+    dashboard = beginner_reports.dashboard
+    validity_report = beginner_reports.validity_report
+    st.session_state["beginner_decision_coach_report"] = beginner_reports.decision_coach_report
     sensitivity_result = _transaction_cost_sensitivity_result(result, config)
     st.session_state["transaction_cost_sensitivity_result"] = sensitivity_result
 

@@ -37,11 +37,35 @@ model output columns or free-form LLM text.
 | `src/quant_research/pipeline.py` `PipelineResult.signals` | `signals=backtest.signals` | Pipeline-level outputs pass through `BacktestResult.signals`; model predictions remain in `PipelineResult.predictions`. |
 | `app.py` latest deterministic signals table | Reads `result.signals` for the latest date and displays those rows. | The UI table title and source both use deterministic signals; it does not read `result.predictions["action"]`. |
 | `app.py` no-model-proxy counts | Reads `action_counts` from deterministic signal evaluation metrics. | Counts are aggregate metrics derived from `result.signals`, not model labels. |
-| `src/quant_research/dashboard/beginner.py` `raw_signal` diagnostic | `_latest_action` reads `result.signals` first. | `raw_signal` is explicitly hidden from rendered beginner UI; the defensive `result.predictions["action"]` fallback is documented as a non-emission compatibility fallback only. |
+| `src/quant_research/dashboard/beginner.py` `BeginnerDecisionCoachReport` | `_strict_latest_signal_action(result.signals, ticker)` reads only `PipelineResult.signals` for the beginner final visible label. | Korean beginner labels are mapped from deterministic signal output plus validation gate state; `result.predictions["action"]` is ignored for this report. |
+| `src/quant_research/dashboard/beginner.py` `raw_signal` diagnostic | `_latest_action` reads `result.signals` first. | `raw_signal` is hidden from the beginner top block; the defensive `result.predictions["action"]` fallback is documented as a non-emission compatibility fallback only. |
 | `src/quant_research/validation/report_generation.py` completed report | `build_completed_validation_backtest_report` accepts `deterministic_signal_outputs`; `_signal_summary` aggregates its `action` column. | The report builder deliberately does not accept raw model prediction sections as final action inputs. |
 | `src/quant_research/validation/gate.py` validity report counts | Renders `action_counts` already present in deterministic signal evaluation metrics. | Validity reports summarize deterministic signal metrics; they do not compute labels from model outputs. |
 | `src/quant_research/validation/report_renderer.py` structured report renderers | Render payload sections produced by completed-report builders. | Generic renderers only serialize provided report payloads; they do not read prediction frames. |
 | `scripts/run_backtest_validation.py` `signals.csv` | Writes `result.backtest.signals` and passes it as `deterministic_signal_outputs`. | Exported CSV and report artifacts derive from deterministic backtest signals. |
+
+## Beginner Decision Coach Surface
+
+The Beginner Decision Coach is a derived UI surface for first-time U.S. equity
+research users. It does not emit raw final action labels in the first-screen
+beginner block. Instead, it maps deterministic engine actions to Korean research
+labels and then applies validation gate state before rendering:
+
+| Deterministic action source | Validation gate state | Beginner visible label | Notes |
+|---|---|---|---|
+| `BUY` from `PipelineResult.signals` | `PASS` | `긍정적` | Deterministic positive research signal; still research-only and not personalized advice. |
+| `SELL` from `PipelineResult.signals` | `PASS` | `부정적` | Deterministic negative research signal; no shorting or live order path is implied. |
+| `HOLD` from `PipelineResult.signals` | `PASS` | `보류` | Deterministic hold/research wait signal. |
+| Any deterministic action | `FAIL`, `missing`, `unknown`, or `warning` | `{mapped label}이지만 검증 불충분` | Validation gate prevents the label from being read as standalone. |
+| Missing deterministic action | Any state | `검증 불충분` | No prediction action fallback is used for the Beginner Decision Coach report. |
+
+Implementation evidence:
+
+- `build_beginner_decision_coach_report()` calls `_strict_latest_signal_action(result.signals, ticker)` for the visible beginner decision.
+- `result.predictions["action"]` is ignored by the Beginner Decision Coach report even if present.
+- `decision_source` is rendered as `deterministic_signal_engine`.
+- Raw `BUY / SELL / HOLD` provenance appears only in the default-closed `고급: 원천 action provenance` disclosure with the warning `이 값은 주문 신호가 아니라 deterministic engine의 원천 action입니다`.
+- The visible beginner label remains a research aid: no personalized investment advice, no broker connection, and no order control.
 
 ## Package API Surfaces
 
@@ -64,7 +88,8 @@ model output columns or free-form LLM text.
 | `app.py` | no-model-proxy ablation panel | Displays `buy_count`, `sell_count`, and `hold_count` from deterministic signal evaluation metrics. | Aggregate display only; no row-level label generation. |
 | `src/quant_research/dashboard/beginner.py` | `build_beginner_research_dashboard` | Sets `raw_signal` from `_latest_action`. | Dashboard object keeps the raw label for diagnostics while `research_summary["raw_signal_visible"]` is `False`. |
 | `src/quant_research/dashboard/beginner.py` | `_latest_action` | Reads the latest label from `result.signals`; falls back to `result.predictions["action"]` only if present, then `HOLD`. | The fallback is defensive for missing data. Production pipeline predictions do not create final labels. |
-| `src/quant_research/dashboard/streamlit.py` | `render_beginner_overview` | Does not render `raw_signal`. | Beginner UI renders badges, forecasts, SEC events, and metrics instead of direct action labels. |
+| `src/quant_research/dashboard/beginner.py` | `build_beginner_decision_coach_report` | Maps deterministic `result.signals` action to `긍정적`, `부정적`, or `보류`, then downgrades on validation gate failure. | This is a derived beginner label surface, not a new raw action producer. |
+| `src/quant_research/dashboard/streamlit.py` | `render_beginner_overview` | Renders the Beginner Decision Coach label, evidence, and validation context. | Top block does not render raw `BUY / SELL / HOLD`; raw action provenance appears only inside the default-closed advanced disclosure. |
 
 ## Report Surfaces
 

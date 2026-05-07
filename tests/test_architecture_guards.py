@@ -729,6 +729,7 @@ def test_final_action_label_inventory_covers_all_audited_surfaces() -> None:
 
     for section in (
         "## Source Of Final Labels",
+        "## Beginner Decision Coach Surface",
         "## Package API Surfaces",
         "## UI Surfaces",
         "## Report Surfaces",
@@ -761,6 +762,7 @@ def test_final_action_label_inventory_covers_all_audited_surfaces() -> None:
         "only `src/quant_research/signals/engine.py` assigns final",
         "Each audited emission path receives labels from the deterministic signal output",
         "defensive `result.predictions[\"action\"]` fallback is documented as a non-emission",
+        "Korean beginner labels are mapped from deterministic signal output plus validation gate state",
     ):
         assert invariant in markdown
 
@@ -910,3 +912,35 @@ def test_beginner_dashboard_prediction_action_fallback_is_non_rendered_and_docum
     assert "raw_signal" not in streamlit_source
     assert "defensive `result.predictions[\"action\"]` fallback" in inventory
     assert "non-emission compatibility fallback" in inventory
+
+
+def test_beginner_decision_coach_label_surface_is_documented_and_guarded() -> None:
+    dashboard_source = _source_text("src/quant_research/dashboard/beginner.py")
+    streamlit_source = _source_text("src/quant_research/dashboard/streamlit.py")
+    inventory = _source_text("docs/final-action-label-inventory.md")
+
+    assert '"BUY": "긍정적"' in dashboard_source
+    assert '"SELL": "부정적"' in dashboard_source
+    assert '"HOLD": "보류"' in dashboard_source
+    assert "research_signal, signal_row = _strict_latest_signal_action(result.signals, ticker)" in dashboard_source
+    assert "display_label = _decision_display_label(research_signal, gate)" in dashboard_source
+    assert "decision_source=DECISION_SOURCE" in dashboard_source
+    assert "`result.predictions[\"action\"]` is ignored" in inventory
+
+    for snippet in (
+        "`BUY` from `PipelineResult.signals`",
+        "`SELL` from `PipelineResult.signals`",
+        "`HOLD` from `PipelineResult.signals`",
+        "`긍정적`",
+        "`부정적`",
+        "`보류`",
+        "`{mapped label}이지만 검증 불충분`",
+        "`검증 불충분`",
+        "`decision_source` is rendered as `deterministic_signal_engine`",
+    ):
+        assert snippet in inventory
+
+    assert "고급: 원천 action provenance" in streamlit_source
+    assert "expanded=False" in streamlit_source
+    assert "이 값은 주문 신호가 아니라 deterministic engine의 원천 action입니다." in streamlit_source
+    assert "result.predictions" not in streamlit_source

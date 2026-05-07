@@ -517,6 +517,72 @@ def test_transaction_cost_sensitivity_renderer_surfaces_calculation_failure(
     assert calculation_row["value"] == 1
 
 
+def test_beginner_report_bundle_builds_gate_before_decision_coach(monkeypatch) -> None:
+    app_module = _load_app_module()
+    result = _build_stub_result()
+    config = pipeline.PipelineConfig()
+    calls: list[str] = []
+    validity_report = SimpleNamespace(
+        validity_gate_result_summary={"final_gate_decision": "FAIL"},
+        system_validity_status="pass",
+        strategy_candidate_status="fail",
+    )
+    expected_decision_coach_report = SimpleNamespace(
+        display_label="긍정적이지만 검증 불충분"
+    )
+    dashboard = SimpleNamespace(decision_coach_report=expected_decision_coach_report)
+
+    def fake_build_validity_gate_report(*args, **kwargs):
+        calls.append("validity")
+        return validity_report
+
+    def fake_build_beginner_decision_coach_report(
+        result_arg,
+        ticker_arg,
+        validity_arg,
+        config_arg,
+    ):
+        calls.append("decision_coach")
+        assert result_arg is result
+        assert ticker_arg == "AAPL"
+        assert validity_arg is validity_report
+        assert config_arg is config
+        return expected_decision_coach_report
+
+    def fake_build_beginner_research_dashboard(
+        result_arg,
+        ticker_arg,
+        config_arg,
+        *,
+        decision_coach_report=None,
+    ):
+        calls.append("dashboard")
+        assert result_arg is result
+        assert ticker_arg == "AAPL"
+        assert config_arg is config
+        assert decision_coach_report is expected_decision_coach_report
+        return dashboard
+
+    monkeypatch.setattr(app_module, "build_validity_gate_report", fake_build_validity_gate_report)
+    monkeypatch.setattr(
+        app_module,
+        "build_beginner_decision_coach_report",
+        fake_build_beginner_decision_coach_report,
+    )
+    monkeypatch.setattr(
+        app_module,
+        "build_beginner_research_dashboard",
+        fake_build_beginner_research_dashboard,
+    )
+
+    bundle = app_module._build_beginner_report_bundle(result, "AAPL", config)
+
+    assert calls == ["validity", "decision_coach", "dashboard"]
+    assert bundle.validity_report is validity_report
+    assert bundle.decision_coach_report is expected_decision_coach_report
+    assert bundle.dashboard is dashboard
+
+
 def _child_nodes(node: object) -> list[object]:
     children = getattr(node, "children", None)
     if isinstance(children, dict):
@@ -524,6 +590,14 @@ def _child_nodes(node: object) -> list[object]:
     if isinstance(children, list):
         return children
     return []
+
+
+def _descendant_nodes(node: object) -> list[object]:
+    descendants: list[object] = []
+    for child in _child_nodes(node):
+        descendants.append(child)
+        descendants.extend(_descendant_nodes(child))
+    return descendants
 
 
 def _collect_dataframes(node: object) -> list[object]:
@@ -602,10 +676,16 @@ def _assert_beginner_dashboard_rendered(app: object, captured: dict[str, object]
     metric_labels = {metric.label for metric in app.metric}
 
     assert any("Beginner Research Overview" in markdown for markdown in markdown_values)
+    assert any("최종 연구 신호" in markdown for markdown in markdown_values)
+    assert any("판단 이유" in markdown for markdown in markdown_values)
+    assert any("근거 요약" in markdown for markdown in markdown_values)
+    assert any("아직 부족한 근거" in markdown for markdown in markdown_values)
     assert any(
         "연구용 리서치 화면이며 투자 권고가 아닙니다. 실거래 주문 기능은 제공하지 않습니다." in markdown
         for markdown in markdown_values
     )
+    assert any("신호 출처: `deterministic_signal_engine`" in caption for caption in caption_values)
+    assert any("LLM/텍스트 모델은 feature extractor로만 사용" in caption for caption in caption_values)
 
     assert any("**방향성**" in markdown for markdown in markdown_values)
     assert any("**위험도**" in markdown for markdown in markdown_values)
@@ -616,6 +696,39 @@ def _assert_beginner_dashboard_rendered(app: object, captured: dict[str, object]
     assert _has_evidence(caption_values, ("predicted_volatility", "max_drawdown"))
     assert _has_evidence(caption_values, ("risk_flag", "event_tag", "confidence"))
     assert _has_evidence(caption_values, ("is_oos", "sharpe", "hit_rate"))
+    assert "beginner_decision_coach_report" in app.session_state
+    decision_coach_report = app.session_state["beginner_decision_coach_report"]
+    assert decision_coach_report.decision_source == "deterministic_signal_engine"
+    assert decision_coach_report.advanced_disclosure["raw_signal_visible"] is False
+    assert {"예측 방향", "신뢰도", "검증 Gate", "기준일"}.issubset(metric_labels)
+    decision_evidence_tables = [
+        dataframe.value
+        for dataframe in app.dataframe
+        if {"상태", "근거", "값", "상세"}.issubset(dataframe.value.columns)
+    ]
+    assert decision_evidence_tables
+    assert {
+        "예상 수익률",
+        "Signal score",
+        "하방 분위수",
+        "예측 변동성",
+        "텍스트 리스크",
+        "SEC 위험 flag",
+        "거래 비용",
+        "슬리피지",
+        "Data cutoff",
+    }.issubset(set(decision_evidence_tables[0]["근거"]))
+    decision_disclosure_tables = [
+        dataframe.value
+        for dataframe in app.dataframe
+        if {"항목", "값", "설명"}.issubset(dataframe.value.columns)
+    ]
+    assert decision_disclosure_tables
+    assert "raw action" in set(decision_disclosure_tables[0]["항목"])
+    assert any(
+        "이 값은 주문 신호가 아니라 deterministic engine의 원천 action입니다." in str(value)
+        for value in decision_disclosure_tables[0]["설명"]
+    )
 
     assert any("Forecast Interval" in subheader.value for subheader in app.subheader)
     assert any("SEC Filing Impact" in subheader.value for subheader in app.subheader)
@@ -1041,9 +1154,19 @@ def _assert_beginner_dashboard_rendered(app: object, captured: dict[str, object]
     assert any(node.label == "Apply max daily turnover limit" and node.value is False for node in app.checkbox)
     assert any(node.label == "FinGPT quantized runtime path" for node in app.text_input)
 
-    forecast_column = app.main.children[4].children[0]
-    forecast_nodes = _child_nodes(forecast_column)
-    has_forecast_chart = any(node.__class__.__name__ == "UnknownElement" for node in forecast_nodes)
+    first_screen_nodes = [
+        node
+        for key, node in app.main.children.items()
+        if not _is_tab_container(node)
+    ]
+    first_screen_descendants = [
+        descendant
+        for node in first_screen_nodes
+        for descendant in _descendant_nodes(node)
+    ]
+    has_forecast_chart = any(
+        node.__class__.__name__ == "UnknownElement" for node in first_screen_descendants
+    )
     has_forecast_fallback = any(
         node.__class__.__name__ == "Caption"
         and (
@@ -1052,29 +1175,30 @@ def _assert_beginner_dashboard_rendered(app: object, captured: dict[str, object]
             or "expected_return" in str(node.value)
             or "downside_quantile" in str(node.value)
         )
-        for node in forecast_nodes
+        for node in first_screen_descendants
     )
     has_forecast_fallback = has_forecast_fallback or any(
         node.__class__.__name__ == "Markdown"
         and ("expected_return" in str(node.value) or "downside_quantile" in str(node.value))
-        for node in forecast_nodes
+        for node in first_screen_descendants
     )
     assert has_forecast_chart or has_forecast_fallback
 
-    sec_column = app.main.children[4].children[1]
-    sec_nodes = _child_nodes(sec_column)
-    has_sec_events = any(node.__class__.__name__ == "Markdown" and "·" in str(node.value) for node in sec_nodes)
+    has_sec_events = any(
+        node.__class__.__name__ == "Markdown" and "·" in str(node.value)
+        for node in first_screen_descendants
+    )
     has_sec_fallback = any(
         node.__class__.__name__ == "Caption" and "표시할 SEC 이벤트 카드가 없습니다." in str(node.value)
-        for node in sec_nodes
+        for node in first_screen_descendants
     )
     has_sec_fallback = has_sec_fallback or any(
         node.__class__.__name__ == "Caption" and "predicted_volatility" in str(node.value)
-        for node in sec_nodes
+        for node in first_screen_descendants
     )
     has_sec_fallback = has_sec_fallback or any(
         node.__class__.__name__ == "Markdown" and "위험도" in str(node.value)
-        for node in sec_nodes
+        for node in first_screen_descendants
     )
     assert has_sec_events or has_sec_fallback
 
@@ -1082,11 +1206,6 @@ def _assert_beginner_dashboard_rendered(app: object, captured: dict[str, object]
     assert detail_tables
     assert detail_tables[0]["action"].dropna().astype(str).str.upper().isin({"BUY", "SELL", "HOLD"}).all()
 
-    first_screen_nodes = [
-        node
-        for key, node in app.main.children.items()
-        if not _is_tab_container(node)
-    ]
     first_screen_tables = [
         table
         for node in first_screen_nodes
