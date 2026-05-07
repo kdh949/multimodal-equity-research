@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "broker_order_term_taxonomy": {
+    "prohibited_trading_implementation_terms": [
+      "broker",
+      "brokers",
+      "place_order",
+      "submit_order",
+      "create_order",
+      "market_order",
+      "limit_order",
+      "send_order",
+      "live_trade"
+    ],
+    "allowed_policy_audit_terms": [
+      "no live trading",
+      "prohibited broker",
+      "order placement audit",
+      "guardrail test",
+      "absence evidence"
+    ],
+    "ambiguous_non_trading_terms": [
+      "order",
+      "ordering",
+      "sort_order",
+      "display_order",
+      "ordered_columns",
+      "scenario_order"
+    ],
+    "classification_rules": {
+      "prohibited_implementation": "A term is prohibited when it names broker connectivity, order placement APIs, live execution payloads, or runtime branches in app.py, scripts/*.py, or src/quant_research/**/*.py.",
+      "allowed_policy_audit": "A term is allowed when it appears in docs/tests/fixtures as prohibition, audit evidence, synthetic unsafe examples, or absence checks.",
+      "ambiguous_non_trading": "Order-like words are allowed when the surrounding identifier clearly means sort/display/sequence order and contains no broker, trade, placement, execution, quantity, side, or account context."
+    },
+    "disambiguation_examples": [
+      {
+        "term": "sort_order",
+        "classification": "ambiguous_non_trading",
+        "reason": "UI or dataframe sorting sequence, not a trading order."
+      },
+      {
+        "term": "client.submit_order",
+        "classification": "prohibited_implementation",
+        "reason": "Broker-style order placement API call."
+      },
+      {
+        "term": "order placement audit",
+        "classification": "allowed_policy_audit",
+        "reason": "Documentation or test language proving absence."
+      }
+    ],
+    "associated_tests": [
+      "tests/test_semantic_safety_hardening_evidence.py::test_broker_order_taxonomy_classifies_prohibited_policy_and_ambiguous_terms",
+      "tests/test_architecture_guards.py::test_executable_source_does_not_contain_broker_order_api_terms",
+      "tests/test_architecture_guards.py::test_documented_exception_source_terms_fail_in_executable_production_context"
+    ]
+  },
+  "action_like_text_taxonomy": {
+    "final_action_labels": [
+      "BUY",
+      "SELL",
+      "HOLD"
+    ],
+    "case_variants": [
+      "buy",
+      "Buy",
+      "SELL",
+      "hold"
+    ],
+    "natural_language_recommendation_phrases": [
+      "buy now",
+      "strong buy",
+      "sell the stock",
+      "hold pending earnings",
+      "recommend accumulation",
+      "exit the position"
+    ],
+    "ticker_style_labels": [
+      "BUY: AAPL",
+      "SELL-MSFT",
+      "HOLD_NVDA"
+    ],
+    "negated_examples": [
+      "do not buy",
+      "not a sell recommendation",
+      "no hold decision"
+    ],
+    "allowed_non_signal_contexts": [
+      "fixture_expectation",
+      "report_label",
+      "diagnostic",
+      "audit_language",
+      "documentation"
+    ],
+    "associated_tests": [
+      "tests/test_semantic_safety_hardening_evidence.py::test_action_like_text_taxonomy_detects_variants_and_negation",
+      "tests/test_signal_engine.py::test_signal_engine_does_not_pass_through_model_or_llm_action_labels",
+      "tests/test_architecture_guards.py::test_model_llm_output_surfaces_do_not_emit_final_action_labels"
+    ]
+  }
+}

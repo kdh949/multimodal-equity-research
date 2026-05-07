@@ -43,6 +43,7 @@ FUTURE_LEAKAGE_REPORT_INDICATORS = (
     "forward_return_1",
     "forward_return_5",
 )
+# Guardrail vocabulary: these strings are forbidden in rendered report payloads.
 TRADE_ORDER_LANGUAGE = (
     "place_order",
     "submit_order",

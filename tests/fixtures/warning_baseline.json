@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "triggering_command": "python3 -m pytest",
+  "warnings": [
+    {
+      "warning_class": "FutureWarning",
+      "message_regex": ".*Pipeline instance is not fitted yet.*",
+      "source_path": ".venv/lib/python3.12/site-packages/sklearn/pipeline.py:61",
+      "accepted_count": 2,
+      "rationale": "Dependency-surface warning from fold-local preprocessing evidence; no signal, validation, model, backtest, or report semantics are changed.",
+      "drift_condition": "Fail if class, message regex, source path, command, or count changes without updating this baseline."
+    }
+  ]
+}

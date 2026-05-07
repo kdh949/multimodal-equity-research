@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
+import quant_research.validation.gate as gate_module
 from quant_research.validation import build_validity_gate_report
 from quant_research.validation.gate import (
     calculate_top_decile_20d_excess_return,
@@ -320,3 +321,102 @@ def test_validity_gate_report_exposes_report_only_top_decile_20d_excess_return()
     assert "Report-Only Research Metrics" in report.to_markdown()
     assert "| top_decile_20d_excess_return | report_only | 0.2700 | forward_return_20 | oos_labeled_predictions | True | none |" in report.to_markdown()
     assert "<h2>Report-Only Research Metrics</h2>" in report.to_html()
+
+
+def test_top_decile_20d_excess_return_does_not_change_gate_decisions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dates = pd.date_range("2026-01-02", periods=21, freq="B")
+    tickers = [f"T{i:02d}" for i in range(10)]
+    rows: list[dict[str, object]] = []
+    for fold, date in enumerate(dates):
+        for idx, ticker in enumerate(tickers):
+            rows.append(
+                {
+                    "date": date,
+                    "ticker": ticker,
+                    "fold": fold,
+                    "is_oos": fold >= len(dates) - 2,
+                    "expected_return": float(idx),
+                    "forward_return_20": 0.30 if idx == 9 else 0.00,
+                }
+            )
+    predictions = pd.DataFrame(rows)
+    validation_summary = pd.DataFrame(
+        {
+            "fold": range(len(dates)),
+            "train_end": dates - pd.Timedelta(days=21),
+            "test_start": dates,
+            "is_oos": [False] * (len(dates) - 2) + [True, True],
+            "labeled_test_observations": [len(tickers)] * len(dates),
+            "train_observations": [252] * len(dates),
+        }
+    )
+    equity_curve = pd.DataFrame(
+        {
+            "date": dates,
+            "gross_return": [0.01] * len(dates),
+            "cost_adjusted_return": [0.01] * len(dates),
+            "portfolio_return": [0.01] * len(dates),
+            "benchmark_return": [0.00] * len(dates),
+            "turnover": [0.10] * len(dates),
+            "transaction_cost_return": [0.0] * len(dates),
+            "slippage_cost_return": [0.0] * len(dates),
+            "total_cost_return": [0.0] * len(dates),
+        }
+    )
+    config = SimpleNamespace(
+        tickers=tickers,
+        prediction_target_column="forward_return_20",
+        benchmark_ticker="SPY",
+        gap_periods=20,
+        embargo_periods=20,
+    )
+
+    def report_only_metric(value: float) -> dict[str, object]:
+        return {
+            "metric": "top_decile_20d_excess_return",
+            "target_column": "forward_return_20",
+            "sample_scope": "oos_labeled_predictions",
+            "status": "report_only",
+            "reason": "report-only diagnostic; not used for scoring, action, ranking, thresholding, or gating",
+            "report_only": True,
+            "decision_use": "none",
+            "top_decile_20d_excess_return": value,
+        }
+
+    def build_report_with_metric(value: float):
+        monkeypatch.setattr(
+            gate_module,
+            "calculate_top_decile_20d_excess_return",
+            lambda *args, **kwargs: report_only_metric(value),
+        )
+        return build_validity_gate_report(
+            predictions,
+            validation_summary,
+            equity_curve,
+            SimpleNamespace(cagr=1.0, sharpe=1.0, max_drawdown=-0.01, turnover=0.10),
+            config=config,
+        )
+
+    high_report = build_report_with_metric(99.0)
+    low_report = build_report_with_metric(-99.0)
+
+    assert high_report.metrics["top_decile_20d_excess_return"] == 99.0
+    assert low_report.metrics["top_decile_20d_excess_return"] == -99.0
+    assert high_report.metrics["top_decile_20d_excess_return_status"] == "report_only"
+    assert low_report.metrics["top_decile_20d_excess_return_status"] == "report_only"
+
+    decision_fields = (
+        "final_gate_decision",
+        "final_gate_status",
+        "deterministic_gate_aggregation",
+        "model_value",
+        "deterministic_strategy_validity",
+    )
+    for field in decision_fields:
+        assert high_report.metrics[field] == low_report.metrics[field]
+    assert high_report.system_validity_status == low_report.system_validity_status
+    assert high_report.strategy_candidate_status == low_report.strategy_candidate_status
+    assert high_report.system_validity_pass is low_report.system_validity_pass
+    assert high_report.strategy_pass is low_report.strategy_pass

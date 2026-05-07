@@ -537,6 +537,76 @@ def test_backtest_records_common_gate_pass_on_final_signals() -> None:
     assert result.signals["signal_generation_gate_status"].iloc[0] == "pass"
 
 
+def test_backtest_generated_validation_signals_are_unchanged_by_warning_metadata() -> None:
+    frame = _prediction_frame(
+        returns=[0.01, 0.01, 0.01],
+        tickers=["BUY_CANDIDATE", "SELL_CANDIDATE", "HOLD_CANDIDATE"],
+        dates=["2026-01-02", "2026-01-02", "2026-01-02"],
+    )
+    frame["expected_return"] = [0.05, 0.05, 0.0001]
+    frame["text_risk_score"] = [0.0, 0.9, 0.0]
+
+    pass_gate = {
+        "validity_gate_result_summary": {
+            "final_gate_decision": "PASS",
+            "system_validity_status": "pass",
+            "strategy_candidate_status": "pass",
+            "reason": "common validation gate passed",
+        }
+    }
+    pass_gate_with_warning_evidence = {
+        **pass_gate,
+        "warning": True,
+        "warnings": [
+            "monthly_turnover_budget: realized max monthly turnover exceeded review budget"
+        ],
+        "structured_warnings": [
+            {
+                "code": "monthly_turnover_budget_exceeded",
+                "severity": "warning",
+                "gate": "monthly_turnover_budget",
+                "metric": "max_monthly_turnover",
+                "value": 0.55,
+                "threshold": 0.50,
+                "operator": "<=",
+            }
+        ],
+        "gate_results": {
+            "monthly_turnover_budget": {
+                "status": "warning",
+                "reason": "realized max monthly turnover exceeded review budget",
+            }
+        },
+    }
+    config = BacktestConfig(top_n=1, max_symbol_weight=1.0)
+
+    baseline = run_long_only_backtest(
+        frame,
+        config,
+        validation_gate=pass_gate,
+        require_validation_gate=True,
+    )
+    with_warning_evidence = run_long_only_backtest(
+        frame,
+        config,
+        validation_gate=pass_gate_with_warning_evidence,
+        require_validation_gate=True,
+    )
+
+    signal_columns = [
+        "date",
+        "ticker",
+        "signal_score",
+        "risk_metric_penalty",
+        "action",
+    ]
+    assert baseline.signals[signal_columns].to_dict("records") == (
+        with_warning_evidence.signals[signal_columns].to_dict("records")
+    )
+    assert with_warning_evidence.signals["signal_generation_gate_decision"].eq("PASS").all()
+    assert with_warning_evidence.signals["signal_generation_gate_status"].eq("pass").all()
+
+
 def test_backtest_ignores_report_only_top_decile_metric_for_position_eligibility() -> None:
     frame = _prediction_frame(
         returns=[0.01, 0.02],

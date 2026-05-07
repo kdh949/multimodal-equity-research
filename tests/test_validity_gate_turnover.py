@@ -281,6 +281,92 @@ def test_validity_report_has_no_turnover_warning_when_turnover_is_within_budget(
     assert "## Structured Warnings" not in report.to_markdown()
 
 
+def test_validation_metrics_are_unchanged_when_turnover_warning_handling_is_enabled() -> None:
+    equity_curve = _passing_equity_curve([0.30, 0.30, 0.0, 0.0, 0.0])
+    predictions = _passing_predictions()
+    validation_summary = _passing_validation_summary()
+    strategy_metrics = SimpleNamespace(cagr=1.0, sharpe=1.0, max_drawdown=0.0, turnover=0.20)
+    config = SimpleNamespace(
+        prediction_target_column="forward_return_1",
+        gap_periods=5,
+        embargo_periods=5,
+    )
+    common_kwargs = {
+        "predictions": predictions,
+        "validation_summary": validation_summary,
+        "equity_curve": equity_curve,
+        "strategy_metrics": strategy_metrics,
+        "ablation_summary": _passing_ablation_summary(),
+        "config": config,
+    }
+
+    no_warning_report = build_validity_gate_report(
+        **common_kwargs,
+        thresholds=ValidationGateThresholds(
+            max_daily_turnover=0.35,
+            monthly_turnover_budget=1.00,
+        ),
+    )
+    warning_report = build_validity_gate_report(
+        **common_kwargs,
+        thresholds=ValidationGateThresholds(
+            max_daily_turnover=0.35,
+            monthly_turnover_budget=0.50,
+        ),
+    )
+
+    assert no_warning_report.warning is False
+    assert warning_report.warning is True
+    assert warning_report.gate_results["monthly_turnover_budget"]["status"] == "warning"
+    assert warning_report.strategy_candidate_status == "pass"
+
+    invariant_metric_keys = (
+        "fold_count",
+        "oos_fold_count",
+        "insufficient_data",
+        "target_column",
+        "target_horizon",
+        "reporting_target_column",
+        "reporting_target_horizon",
+        "configured_target_column",
+        "configured_target_horizon",
+        "required_validation_horizon",
+        "horizon_metrics",
+        "gap_periods",
+        "embargo_periods",
+        "purge_embargo_application",
+        "strategy_cagr",
+        "strategy_sharpe",
+        "strategy_max_drawdown",
+        "strategy_turnover",
+        "strategy_gross_cumulative_return",
+        "strategy_cost_adjusted_cumulative_return",
+        "strategy_transaction_cost_return",
+        "strategy_slippage_cost_return",
+        "strategy_total_cost_return",
+        "strategy_excess_return_vs_spy",
+        "strategy_excess_return_vs_equal_weight",
+        "mean_rank_ic",
+        "positive_fold_ratio",
+        "positive_fold_ratio_threshold",
+        "positive_fold_ratio_passed",
+        "oos_rank_ic",
+        "top_decile_20d_excess_return",
+        "top_decile_20d_excess_return_status",
+        "top_decile_20d_excess_return_scope",
+        "top_decile_20d_excess_return_decision_use",
+        "cost_adjusted_metric_comparison",
+        "side_by_side_metric_comparison",
+        "baseline_comparisons",
+        "model_comparison_results",
+        "full_model_metrics",
+        "baseline_metrics",
+        "ablation_metrics",
+    )
+    for key in invariant_metric_keys:
+        assert warning_report.metrics[key] == no_warning_report.metrics[key]
+
+
 def test_validity_report_uses_combined_turnover_when_monthly_budget_passes() -> None:
     thresholds = ValidationGateThresholds(max_daily_turnover=0.35, monthly_turnover_budget=0.50)
 
