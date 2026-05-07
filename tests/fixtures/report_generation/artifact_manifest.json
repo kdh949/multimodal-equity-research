@@ -1,0 +1,11 @@
+{
+  "schema_id": "stage1_completed_run_artifact_manifest",
+  "created_at": "2025-03-04T00:00:00+00:00",
+  "artifacts": [
+    {
+      "artifact_id": "fixture_inputs",
+      "artifact_type": "fixture",
+      "path": "tests/fixtures/report_generation"
+    }
+  ]
+}

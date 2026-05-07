@@ -1,0 +1,22 @@
+{
+  "experiment_id": "stage1_exp",
+  "run_id": "fixture_run_001",
+  "start_date": "2022-01-03",
+  "end_date": "2025-03-03",
+  "created_at": "2025-03-04T00:00:00+00:00",
+  "universe": ["AAPL", "MSFT"],
+  "data_sources": [
+    {
+      "source_id": "prices",
+      "provider": "synthetic",
+      "dataset": "ohlcv",
+      "as_of_date": "2025-03-03",
+      "available_at": "2025-03-03T00:00:00+00:00"
+    }
+  ],
+  "feature_availability_cutoff": {
+    "price": "date <= t",
+    "news_text": "published_at <= t",
+    "sec_filing": "accepted_at <= t"
+  }
+}

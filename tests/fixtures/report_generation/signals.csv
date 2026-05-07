@@ -1,0 +1,5 @@
+date,ticker,action,signal_score,model_confidence,risk_metric_penalty,signal_engine,cost_bps,slippage_bps
+2025-01-31,AAPL,BUY,0.5,0.7,0.0,deterministic_signal_engine,5.0,2.0
+2025-01-31,MSFT,HOLD,0.1,0.6,0.1,deterministic_signal_engine,5.0,2.0
+2025-02-28,AAPL,BUY,0.6,0.8,0.0,deterministic_signal_engine,5.0,2.0
+2025-02-28,MSFT,SELL,0.2,0.5,0.2,deterministic_signal_engine,5.0,2.0

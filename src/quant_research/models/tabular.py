@@ -22,6 +22,27 @@ IDENTIFIER_COLUMNS = {
     "forward_return_1",
     "news_top_event",
 }
+MODEL_PREDICTION_OUTPUT_COLUMNS = {
+    "raw_expected_return",
+    "expected_return",
+    "predicted_volatility",
+    "downside_quantile",
+    "upside_quantile",
+    "quantile_width",
+    "model_confidence",
+    "model_calibration_scale",
+    "model_calibration_bias",
+    "signal_score",
+}
+MODEL_PREDICTION_OUTPUT_PREFIXES = (
+    "model_prediction_",
+    "model_predicted_",
+    "prediction_",
+    "predicted_",
+    "proxy_prediction_",
+    "proxy_predicted_",
+    "proxy_",
+)
 
 
 @dataclass
@@ -78,9 +99,10 @@ class TabularReturnModel:
             upper_quantile=self.winsorization_upper_quantile,
             enabled=self.winsorize_features,
         )
-        steps = [("winsorize", winsorizer), ("imputer", SimpleImputer(strategy="median")), ("model", estimator)]
+        imputer = SimpleImputer(strategy="median", keep_empty_features=True)
+        steps = [("winsorize", winsorizer), ("imputer", imputer), ("model", estimator)]
         if not self.winsorize_features:
-            steps = [("imputer", SimpleImputer(strategy="median")), ("model", estimator)]
+            steps = [("imputer", imputer), ("model", estimator)]
         self._winsorizer = winsorizer
         self.fitted_model = Pipeline(steps=steps)
         sample_weight = (
@@ -106,11 +128,14 @@ class TabularReturnModel:
                 if self.winsorize_features:
                     steps = [
                         ("winsorize", winsorizer),
-                        ("imputer", SimpleImputer(strategy="median")),
+                        ("imputer", SimpleImputer(strategy="median", keep_empty_features=True)),
                         ("model", fallback),
                     ]
                 else:
-                    steps = [("imputer", SimpleImputer(strategy="median")), ("model", fallback)]
+                    steps = [
+                        ("imputer", SimpleImputer(strategy="median", keep_empty_features=True)),
+                        ("model", fallback),
+                    ]
                 self.fitted_model = Pipeline(steps=steps)
                 _fit_pipeline(self.fitted_model, feature_matrix, train[target], fit_kwargs)
             else:
@@ -125,6 +150,13 @@ class TabularReturnModel:
                 "train_rows": len(train),
                 "feature_columns": list(self.feature_columns),
                 "feature_count": len(self.feature_columns),
+                "preprocessing_fit_scope": "fold_train_only",
+                "preprocessing_transform_scope": "validation_test_only",
+                "preprocessing_pipeline_steps": [
+                    name
+                    for name, _ in getattr(self.fitted_model, "steps", [])
+                    if name != "model"
+                ],
                 "winsorized_feature_count": len(getattr(self._winsorizer, "bounds", {})),
                 "winsorization_enabled": bool(self.winsorize_features),
                 "winsorization_lower_quantile": self.winsorization_lower_quantile,
@@ -461,7 +493,19 @@ def infer_feature_columns(frame: pd.DataFrame, target: str = "forward_return_1")
     excluded = set(IDENTIFIER_COLUMNS)
     excluded.add(target)
     numeric_columns = frame.select_dtypes(include=[np.number]).columns
-    return [column for column in numeric_columns if column not in excluded]
+    return [
+        column
+        for column in numeric_columns
+        if column not in excluded
+        and not column.startswith("forward_return_")
+        and not _is_model_prediction_output_column(str(column))
+    ]
+
+
+def _is_model_prediction_output_column(column: str) -> bool:
+    return column in MODEL_PREDICTION_OUTPUT_COLUMNS or column.startswith(
+        MODEL_PREDICTION_OUTPUT_PREFIXES
+    )
 
 
 def _make_estimator(model_name: str, random_state: int, num_threads: int = 1) -> BaseEstimator:
