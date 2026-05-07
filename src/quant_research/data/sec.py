@@ -12,6 +12,13 @@ import pandas as pd
 import requests
 
 from quant_research.config import SecSettings
+from quant_research.data.timestamps import (
+    UTC_TIMEZONE,
+    coalesce_timestamps,
+    date_end_utc,
+    max_timestamps,
+    timestamp_utc,
+)
 
 _SEC_DOCUMENT_CACHE_VERSION = 1
 
@@ -73,6 +80,7 @@ class SecEdgarClient:
             "accessionNumber",
             "filingDate",
             "reportDate",
+            "acceptanceDateTime",
             "form",
             "primaryDocument",
         ]
@@ -84,6 +92,7 @@ class SecEdgarClient:
                 "accessionNumber": "accession_number",
                 "filingDate": "filing_date",
                 "reportDate": "report_date",
+                "acceptanceDateTime": "acceptance_datetime",
                 "primaryDocument": "primary_document",
             }
         )
@@ -91,6 +100,7 @@ class SecEdgarClient:
         frame["accession_number_no_dash"] = frame["accession_number"].apply(_normalize_accession_number)
         frame["filing_date"] = pd.to_datetime(frame["filing_date"], errors="coerce")
         frame["report_date"] = pd.to_datetime(frame["report_date"], errors="coerce")
+        frame = _add_filing_timestamps(frame)
         if forms:
             frame = frame[frame["form"].isin(forms)]
         if frame.empty:
@@ -190,6 +200,7 @@ class SyntheticSecProvider:
                 "form": "10-Q",
                 "primary_document": "10q.htm",
                 "document_text": "Synthetic 10-Q filing body",
+                "acceptance_datetime": base + pd.offsets.BDay(20) + pd.Timedelta(hours=17),
             },
             {
                 "cik": cik10,
@@ -200,6 +211,7 @@ class SyntheticSecProvider:
                 "form": "8-K",
                 "primary_document": "8k.htm",
                 "document_text": "Synthetic 8-K filing body",
+                "acceptance_datetime": base + pd.offsets.BDay(55) + pd.Timedelta(hours=17),
             },
             {
                 "cik": cik10,
@@ -210,6 +222,7 @@ class SyntheticSecProvider:
                 "form": "4",
                 "primary_document": "form4.xml",
                 "document_text": "Synthetic form 4 filing body",
+                "acceptance_datetime": base + pd.offsets.BDay(90) + pd.Timedelta(hours=17),
             },
             {
                 "cik": cik10,
@@ -220,9 +233,11 @@ class SyntheticSecProvider:
                 "form": "10-K",
                 "primary_document": "10k.htm",
                 "document_text": "Synthetic 10-K filing body",
+                "acceptance_datetime": base + pd.offsets.BDay(130) + pd.Timedelta(hours=17),
             },
         ]
         frame = pd.DataFrame(rows)
+        frame = _add_filing_timestamps(frame)
         if not include_document_text:
             frame = frame.drop(columns=["document_text"])
         return frame[frame["form"].isin(forms)].reset_index(drop=True)
@@ -233,7 +248,7 @@ class SyntheticSecProvider:
         revenue = pd.Series(range(len(dates)), dtype=float) * 100_000_000 + 1_000_000_000
         net_income = revenue * 0.12
         assets = revenue * 4.0
-        return pd.DataFrame(
+        frame = pd.DataFrame(
             {
                 "period_end": dates,
                 "revenue": revenue,
@@ -241,6 +256,7 @@ class SyntheticSecProvider:
                 "assets": assets,
             }
         )
+        return _add_fact_timestamps(frame)
 
 
 def extract_companyfacts_frame(companyfacts: dict[str, Any]) -> pd.DataFrame:
@@ -261,15 +277,19 @@ def extract_companyfacts_frame(companyfacts: dict[str, Any]) -> pd.DataFrame:
         part = pd.DataFrame(unit_values)
         if part.empty or "end" not in part or "val" not in part:
             continue
+        for column_name in ["fy", "fp", "form", "filed"]:
+            if column_name not in part:
+                part[column_name] = None
         part = part[["end", "val", "fy", "fp", "form", "filed"]].copy()
         part["period_end"] = pd.to_datetime(part["end"], errors="coerce")
         part[column] = pd.to_numeric(part["val"], errors="coerce")
-        frames.append(part[["period_end", column]])
+        frames.append(_add_fact_timestamps(part[["period_end", column, "filed"]]))
     if not frames:
         return pd.DataFrame(columns=["period_end", "revenue", "net_income", "assets"])
     merged = frames[0]
     for part in frames[1:]:
         merged = merged.merge(part, on="period_end", how="outer")
+    merged = _finalize_fact_timestamp_columns(merged)
     return merged.sort_values("period_end").drop_duplicates("period_end", keep="last").reset_index(drop=True)
 
 
@@ -283,7 +303,10 @@ def extract_companyconcept_frame(companyconcept: dict[str, Any], column: str) ->
         return pd.DataFrame(columns=["period_end", column])
     frame["period_end"] = pd.to_datetime(frame["end"], errors="coerce")
     frame[column] = pd.to_numeric(frame["val"], errors="coerce")
-    return frame[["period_end", column]].dropna(subset=["period_end"]).sort_values("period_end")
+    if "filed" not in frame:
+        frame["filed"] = None
+    frame = _add_fact_timestamps(frame[["period_end", column, "filed"]])
+    return frame.dropna(subset=["period_end"]).sort_values("period_end")
 
 
 def extract_frame_values(frame_payload: dict[str, Any], column: str) -> pd.DataFrame:
@@ -313,7 +336,110 @@ def merge_fact_frames(*frames: pd.DataFrame) -> pd.DataFrame:
                     merged = merged.drop(columns=[column])
                 else:
                     merged = merged.rename(columns={column: base_column})
+    merged = _finalize_fact_timestamp_columns(merged)
     return merged.sort_values("period_end").drop_duplicates("period_end", keep="last").reset_index(drop=True)
+
+
+def _add_filing_timestamps(frame: pd.DataFrame) -> pd.DataFrame:
+    normalized = frame.copy()
+    if "report_date" in normalized:
+        report_timestamp = date_end_utc(normalized["report_date"], UTC_TIMEZONE)
+    else:
+        report_timestamp = pd.Series(pd.NaT, index=normalized.index, dtype="datetime64[ns, UTC]")
+    if "filing_date" in normalized:
+        filing_timestamp = date_end_utc(normalized["filing_date"], UTC_TIMEZONE)
+    else:
+        filing_timestamp = pd.Series(pd.NaT, index=normalized.index, dtype="datetime64[ns, UTC]")
+    if "acceptance_datetime" in normalized:
+        source_timestamp = timestamp_utc(normalized["acceptance_datetime"], UTC_TIMEZONE)
+    else:
+        source_timestamp = pd.Series(pd.NaT, index=normalized.index, dtype="datetime64[ns, UTC]")
+    public_timestamp = _coalesced_timestamp_columns(
+        normalized,
+        (
+            "public_timestamp",
+            "publication_timestamp",
+            "published_at",
+            "public_date",
+        ),
+    )
+    collection_timestamp = _coalesced_timestamp_columns(
+        normalized,
+        (
+            "collected_at",
+            "collection_timestamp",
+            "retrieved_at",
+            "downloaded_at",
+            "available_at",
+            "available_timestamp",
+        ),
+    )
+
+    normalized["event_timestamp"] = coalesce_timestamps(report_timestamp, filing_timestamp)
+    normalized["source_timestamp"] = coalesce_timestamps(public_timestamp, source_timestamp, filing_timestamp)
+    normalized["availability_timestamp"] = coalesce_timestamps(
+        collection_timestamp,
+        normalized["source_timestamp"],
+        filing_timestamp,
+    )
+    normalized["timezone"] = UTC_TIMEZONE
+    return normalized
+
+
+def _coalesced_timestamp_columns(frame: pd.DataFrame, columns: tuple[str, ...]) -> pd.Series:
+    values = [
+        timestamp_utc(frame[column], UTC_TIMEZONE)
+        for column in columns
+        if column in frame
+    ]
+    if not values:
+        return pd.Series(pd.NaT, index=frame.index, dtype="datetime64[ns, UTC]")
+    return coalesce_timestamps(*values)
+
+
+def _add_fact_timestamps(frame: pd.DataFrame) -> pd.DataFrame:
+    normalized = frame.copy()
+    event_timestamp = date_end_utc(normalized["period_end"], UTC_TIMEZONE)
+    if "filed" in normalized:
+        source_timestamp = date_end_utc(normalized["filed"], UTC_TIMEZONE)
+    else:
+        source_timestamp = pd.Series(pd.NaT, index=normalized.index, dtype="datetime64[ns, UTC]")
+    normalized = normalized.drop(columns=["filed"], errors="ignore")
+    normalized["event_timestamp"] = event_timestamp
+    normalized["source_timestamp"] = source_timestamp
+    normalized["availability_timestamp"] = coalesce_timestamps(source_timestamp, event_timestamp)
+    normalized["timezone"] = UTC_TIMEZONE
+    return normalized
+
+
+def _finalize_fact_timestamp_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    normalized = frame.copy()
+    event_columns = _timestamp_columns(normalized, "event_timestamp")
+    availability_columns = _timestamp_columns(normalized, "availability_timestamp")
+    source_columns = _timestamp_columns(normalized, "source_timestamp")
+    timezone_columns = _timestamp_columns(normalized, "timezone")
+    drop_columns = [*event_columns, *availability_columns, *source_columns, *timezone_columns]
+
+    event_timestamp = date_end_utc(normalized["period_end"], UTC_TIMEZONE)
+    source_timestamp = max_timestamps(*(normalized[column] for column in source_columns)) if source_columns else None
+    availability_timestamp = (
+        max_timestamps(*(normalized[column] for column in availability_columns)) if availability_columns else None
+    )
+
+    normalized = normalized.drop(columns=drop_columns, errors="ignore")
+    normalized["event_timestamp"] = event_timestamp
+    if source_timestamp is None:
+        source_timestamp = pd.Series(pd.NaT, index=normalized.index, dtype="datetime64[ns, UTC]")
+    normalized["source_timestamp"] = source_timestamp
+    if availability_timestamp is None:
+        availability_timestamp = coalesce_timestamps(source_timestamp, event_timestamp)
+    normalized["availability_timestamp"] = coalesce_timestamps(availability_timestamp, event_timestamp)
+    normalized["timezone"] = UTC_TIMEZONE
+    return normalized
+
+
+def _timestamp_columns(frame: pd.DataFrame, base_name: str) -> list[str]:
+    return [column for column in frame.columns if column == base_name or column.startswith(f"{base_name}_")]
 
 
 def _normalize_cik(cik: str) -> str:
@@ -329,8 +455,13 @@ def _empty_filings() -> pd.DataFrame:
             "accession_number_no_dash",
             "filing_date",
             "report_date",
+            "acceptance_datetime",
             "form",
             "primary_document",
+            "event_timestamp",
+            "availability_timestamp",
+            "source_timestamp",
+            "timezone",
         ]
     )
 

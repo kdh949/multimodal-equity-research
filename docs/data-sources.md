@@ -1,5 +1,8 @@
 # Data Sources
 
+모든 원천 데이터와 feature row는 [데이터 타임스탬프 스키마](data-timestamp-schema.md)의
+`event_timestamp`, `availability_timestamp`, `source_timestamp`, timezone, null 허용 정책을 따른다.
+
 ## Market Data
 
 v1은 `yfinance`를 기본 무료 provider로 사용한다.

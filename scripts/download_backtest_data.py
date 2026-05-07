@@ -148,8 +148,6 @@ def download_sec(tickers: list[str], start: str, end: str, out_dir: Path) -> Non
     print(f"\n[3/3] SEC data — {len(tickers)} tickers (auto-cached to {out_dir / 'sec'})")
     from quant_research.data.sec import (
         SecEdgarClient,
-        extract_companyconcept_frame,
-        extract_companyfacts_frame,
         extract_frame_values,
     )
 

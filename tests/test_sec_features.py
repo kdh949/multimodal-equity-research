@@ -52,6 +52,24 @@ def test_sec_features_handle_empty_inputs() -> None:
     assert sec_features["revenue_growth"].eq(0).all()
 
 
+def test_sec_features_keep_unknown_cik_tickers_neutral() -> None:
+    calendar = pd.DataFrame(
+        {
+            "date": list(pd.date_range("2025-01-01", periods=5)) * 2,
+            "ticker": ["AAPL"] * 5 + ["UNKNOWN"] * 5,
+        }
+    )
+
+    sec_features = build_sec_features({}, {}, calendar)
+    unknown = sec_features[sec_features["ticker"] == "UNKNOWN"]
+
+    assert len(unknown) == 5
+    assert unknown["sec_risk_flag"].eq(0).all()
+    assert unknown["sec_risk_flag_20d"].eq(0).all()
+    assert unknown["sec_event_tag"].eq("none").all()
+    assert unknown["revenue_growth"].eq(0).all()
+
+
 def test_sec_companyconcept_and_frame_extractors_normalize_payloads() -> None:
     concept = {
         "units": {
@@ -245,6 +263,222 @@ def test_sec_daily_filing_features_prefers_document_text_and_emits_body_stats() 
     assert result["sec_filing_text_available"].iloc[0] == 1.0
     assert result["sec_filing_text_length"].iloc[0] == float(len(filings["document_text"].iloc[0]))
     assert result["sec_filing_risk_keyword_count"].iloc[0] == float(4)
+
+
+def test_sec_daily_filing_features_uses_acceptance_availability_date() -> None:
+    filings = pd.DataFrame(
+        {
+            "filing_date": ["2026-01-06"],
+            "report_date": ["2025-12-31"],
+            "acceptance_datetime": ["2026-01-07T01:30:00Z"],
+            "form": ["8-K"],
+            "primary_document": ["8k.htm"],
+            "accession_number": ["0000000000-26-000001"],
+            "document_text": ["Item 1.01 current report"],
+        }
+    )
+
+    result = _daily_filing_features(filings, "AAPL", filing_extractor=_FakeFilingEventExtractor())
+
+    assert result.loc[0, "date"] == pd.Timestamp("2026-01-07")
+    assert result.loc[0, "sec_event_timestamp"] == pd.Timestamp("2025-12-31 23:59:59.999999999", tz="UTC")
+    assert result.loc[0, "sec_availability_timestamp"] == pd.Timestamp("2026-01-07 01:30:00", tz="UTC")
+    assert result.loc[0, "sec_source_timestamp"] == result.loc[0, "sec_availability_timestamp"]
+    assert result.loc[0, "sec_timezone"] == "UTC"
+
+
+def test_sec_daily_filing_features_aligns_acceptance_time_by_market_session() -> None:
+    filings = pd.DataFrame(
+        {
+            "filing_date": ["2026-01-06", "2026-01-06", "2026-01-06"],
+            "report_date": ["2025-12-31", "2025-12-31", "2025-12-31"],
+            "acceptance_datetime": [
+                "2026-01-06T13:00:00Z",  # 08:00 ET, pre-market.
+                "2026-01-06T16:00:00Z",  # 11:00 ET, regular session.
+                "2026-01-06T21:30:00Z",  # 16:30 ET, after close.
+            ],
+            "form": ["8-K", "10-Q", "4"],
+            "primary_document": ["premarket.htm", "intraday.htm", "afterclose.xml"],
+            "accession_number": [
+                "0000000000-26-000101",
+                "0000000000-26-000102",
+                "0000000000-26-000103",
+            ],
+            "document_text": ["pre-market current report", "intraday quarterly report", "after-close form 4"],
+        }
+    )
+
+    result = _daily_filing_features(filings, "AAPL", filing_extractor=_FakeFilingEventExtractor())
+
+    same_day = result.loc[result["date"].eq(pd.Timestamp("2026-01-06"))].iloc[0]
+    next_day = result.loc[result["date"].eq(pd.Timestamp("2026-01-07"))].iloc[0]
+    assert same_day["sec_8k_count"] == 1.0
+    assert same_day["sec_10q_count"] == 1.0
+    assert same_day["sec_form4_count"] == 0.0
+    assert same_day["sec_availability_timestamp"] == pd.Timestamp("2026-01-06 16:00:00", tz="UTC")
+    assert next_day["sec_8k_count"] == 0.0
+    assert next_day["sec_10q_count"] == 0.0
+    assert next_day["sec_form4_count"] == 1.0
+    assert next_day["sec_availability_timestamp"] == pd.Timestamp("2026-01-06 21:30:00", tz="UTC")
+
+
+def test_sec_feature_builder_blocks_after_close_filing_from_same_day_features() -> None:
+    calendar = pd.DataFrame({"date": pd.bdate_range("2026-01-06", periods=2), "ticker": "AAPL"})
+    filings = pd.DataFrame(
+        {
+            "filing_date": ["2026-01-06"],
+            "report_date": ["2025-12-31"],
+            "acceptance_datetime": ["2026-01-06T21:30:00Z"],
+            "form": ["4"],
+            "primary_document": ["form4.xml"],
+            "accession_number": ["0000000000-26-000104"],
+            "document_text": ["after-close insider filing"],
+        }
+    )
+
+    features = build_sec_features({"AAPL": filings}, {"AAPL": pd.DataFrame()}, calendar)
+
+    same_day = features.loc[features["date"].eq(pd.Timestamp("2026-01-06"))].iloc[0]
+    next_day = features.loc[features["date"].eq(pd.Timestamp("2026-01-07"))].iloc[0]
+    assert same_day["sec_form4_count"] == 0.0
+    assert same_day["sec_risk_flag"] == 0.0
+    assert same_day["sec_risk_flag_20d"] == 0.0
+    assert same_day["sec_filing_text_available"] == 0.0
+    assert same_day["sec_event_tag"] == "none"
+    assert pd.isna(same_day["sec_availability_timestamp"])
+    assert next_day["sec_form4_count"] == 1.0
+    assert next_day["sec_risk_flag"] == 1.0
+    assert next_day["sec_risk_flag_20d"] == 1.0
+    assert next_day["sec_filing_text_available"] == 1.0
+    assert next_day["sec_availability_timestamp"] == pd.Timestamp("2026-01-06 21:30:00", tz="UTC")
+
+
+def test_sec_feature_builder_maps_holiday_weekend_and_after_close_filings_to_next_trading_day() -> None:
+    calendar = pd.DataFrame(
+        {
+            "date": [pd.Timestamp("2026-07-02"), pd.Timestamp("2026-07-06")],
+            "ticker": "AAPL",
+        }
+    )
+    filings = pd.DataFrame(
+        {
+            "filing_date": ["2026-07-02", "2026-07-03", "2026-07-04"],
+            "report_date": ["2026-06-30", "2026-06-30", "2026-06-30"],
+            "acceptance_datetime": [
+                "2026-07-02T21:30:00Z",  # 17:30 ET, after close before observed Independence Day.
+                "2026-07-03T14:00:00Z",  # 10:00 ET on market holiday.
+                "2026-07-04T15:00:00Z",  # 11:00 ET on Saturday.
+            ],
+            "form": ["4", "8-K", "10-Q"],
+            "primary_document": ["form4.xml", "8k.htm", "10q.htm"],
+            "accession_number": [
+                "0000000000-26-000201",
+                "0000000000-26-000202",
+                "0000000000-26-000203",
+            ],
+            "document_text": [
+                "after-close insider filing",
+                "holiday current report",
+                "weekend quarterly report",
+            ],
+        }
+    )
+
+    features = build_sec_features(
+        {"AAPL": filings},
+        {"AAPL": pd.DataFrame()},
+        calendar,
+        filing_extractor=_FakeFilingEventExtractor(),
+    )
+
+    before_available = features.loc[features["date"].eq(pd.Timestamp("2026-07-02"))].iloc[0]
+    next_trading_day = features.loc[features["date"].eq(pd.Timestamp("2026-07-06"))].iloc[0]
+    assert before_available["sec_8k_count"] == 0.0
+    assert before_available["sec_10q_count"] == 0.0
+    assert before_available["sec_form4_count"] == 0.0
+    assert pd.isna(before_available["sec_availability_timestamp"])
+    assert next_trading_day["sec_8k_count"] == 1.0
+    assert next_trading_day["sec_10q_count"] == 1.0
+    assert next_trading_day["sec_form4_count"] == 1.0
+    assert next_trading_day["sec_availability_timestamp"] == pd.Timestamp("2026-07-04 15:00:00", tz="UTC")
+
+
+def test_sec_features_use_public_collection_time_not_filing_or_report_date() -> None:
+    calendar = pd.DataFrame({"date": pd.bdate_range("2026-01-05", periods=5), "ticker": "AAPL"})
+    filings = pd.DataFrame(
+        {
+            "filing_date": ["2026-01-02", "2026-01-05"],
+            "report_date": ["2025-12-31", "2025-12-30"],
+            "public_timestamp": [
+                "2026-01-08T14:00:00Z",
+                "2026-01-06T14:00:00Z",
+            ],
+            "collected_at": [
+                "2026-01-08T14:30:00Z",
+                "2026-01-06T14:30:00Z",
+            ],
+            "form": ["8-K", "10-Q"],
+            "primary_document": ["late-public-8k.htm", "earlier-public-10q.htm"],
+            "accession_number": [
+                "0000000000-26-000301",
+                "0000000000-26-000302",
+            ],
+            "document_text": [
+                "late collected current report",
+                "earlier collected quarterly report",
+            ],
+        }
+    )
+
+    features = build_sec_features(
+        {"AAPL": filings},
+        {"AAPL": pd.DataFrame()},
+        calendar,
+        filing_extractor=_FakeFilingEventExtractor(),
+    )
+
+    before_collection = features.loc[features["date"].lt(pd.Timestamp("2026-01-06"))]
+    first_collection_day = features.loc[features["date"].eq(pd.Timestamp("2026-01-06"))].iloc[0]
+    second_collection_day = features.loc[features["date"].eq(pd.Timestamp("2026-01-08"))].iloc[0]
+
+    assert before_collection["sec_8k_count"].eq(0.0).all()
+    assert before_collection["sec_10q_count"].eq(0.0).all()
+    assert first_collection_day["sec_8k_count"] == 0.0
+    assert first_collection_day["sec_10q_count"] == 1.0
+    assert first_collection_day["sec_source_timestamp"] == pd.Timestamp("2026-01-06 14:00:00", tz="UTC")
+    assert first_collection_day["sec_availability_timestamp"] == pd.Timestamp("2026-01-06 14:30:00", tz="UTC")
+    assert second_collection_day["sec_8k_count"] == 1.0
+    assert second_collection_day["sec_10q_count"] == 0.0
+    assert second_collection_day["sec_source_timestamp"] == pd.Timestamp("2026-01-08 14:00:00", tz="UTC")
+    assert second_collection_day["sec_availability_timestamp"] == pd.Timestamp("2026-01-08 14:30:00", tz="UTC")
+
+
+def test_sec_fact_features_use_filing_availability_not_period_end() -> None:
+    calendar = pd.DataFrame(
+        {
+            "date": pd.date_range("2026-01-02", periods=8, freq="D"),
+            "ticker": "AAPL",
+        }
+    )
+    facts = pd.DataFrame(
+        {
+            "period_end": [pd.Timestamp("2025-12-31")],
+            "revenue": [100.0],
+            "net_income": [10.0],
+            "assets": [500.0],
+            "availability_timestamp": [pd.Timestamp("2026-01-06 22:00:00", tz="UTC")],
+            "event_timestamp": [pd.Timestamp("2025-12-31 23:59:59.999999999", tz="UTC")],
+            "source_timestamp": [pd.Timestamp("2026-01-06 22:00:00", tz="UTC")],
+            "timezone": ["UTC"],
+        }
+    )
+
+    features = build_sec_features({}, {"AAPL": facts}, calendar)
+
+    before_available = features[features["date"] < pd.Timestamp("2026-01-06")]
+    after_available = features[features["date"] >= pd.Timestamp("2026-01-06")]
+    assert before_available["sec_fact_availability_timestamp"].isna().all()
+    assert after_available["sec_fact_availability_timestamp"].notna().all()
 
 
 def test_sec_daily_filing_features_uses_fallback_text_when_body_is_missing() -> None:

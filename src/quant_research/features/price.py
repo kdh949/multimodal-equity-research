@@ -3,6 +3,9 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from quant_research.data.timestamps import filter_available_as_of
+from quant_research.validation.horizons import DEFAULT_VALIDATION_HORIZONS, forward_return_column
+
 
 def build_price_features(price_data: pd.DataFrame) -> pd.DataFrame:
     required = {"date", "ticker", "open", "high", "low", "close", "adj_close", "volume"}
@@ -10,7 +13,7 @@ def build_price_features(price_data: pd.DataFrame) -> pd.DataFrame:
     if missing:
         raise ValueError(f"Missing price columns: {sorted(missing)}")
 
-    frame = price_data.copy()
+    frame = _filter_price_rows_available_at_sample(price_data)
     frame["date"] = pd.to_datetime(frame["date"]).dt.normalize()
     frame = frame.sort_values(["ticker", "date"]).reset_index(drop=True)
     groups = frame.groupby("ticker", group_keys=False)
@@ -18,7 +21,10 @@ def build_price_features(price_data: pd.DataFrame) -> pd.DataFrame:
     frame["return_1"] = groups["adj_close"].pct_change()
     frame["return_5"] = groups["adj_close"].pct_change(5)
     frame["return_20"] = groups["adj_close"].pct_change(20)
-    frame["forward_return_1"] = groups["adj_close"].pct_change().groupby(frame["ticker"]).shift(-1)
+    for horizon in DEFAULT_VALIDATION_HORIZONS:
+        frame[forward_return_column(horizon)] = groups["adj_close"].transform(
+            lambda series, periods=horizon: series.shift(-periods) / series - 1
+        )
     frame["high_low_range"] = (frame["high"] - frame["low"]) / frame["close"].replace(0, np.nan)
     frame["dollar_volume"] = frame["adj_close"] * frame["volume"]
 
@@ -37,6 +43,17 @@ def build_price_features(price_data: pd.DataFrame) -> pd.DataFrame:
     frame["liquidity_score"] = np.log1p(frame["dollar_volume"]).replace([np.inf, -np.inf], np.nan)
 
     return frame.replace([np.inf, -np.inf], np.nan)
+
+
+def _filter_price_rows_available_at_sample(price_data: pd.DataFrame) -> pd.DataFrame:
+    if "availability_timestamp" not in price_data.columns:
+        return price_data.copy()
+    return filter_available_as_of(
+        price_data,
+        price_data["date"],
+        availability_column="availability_timestamp",
+        sample_timestamp_mode="date_end",
+    )
 
 
 def _rsi(series: pd.Series, window: int = 14) -> pd.Series:

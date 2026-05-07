@@ -7,6 +7,8 @@ from typing import Protocol
 import numpy as np
 import pandas as pd
 
+from quant_research.data.timestamps import add_price_timestamps
+
 
 class MarketDataProvider(Protocol):
     def get_history(
@@ -16,7 +18,7 @@ class MarketDataProvider(Protocol):
         end: str | date | None = None,
         interval: str = "1d",
     ) -> pd.DataFrame:
-        """Return normalized OHLCV data with date, ticker, open, high, low, close, adj_close, volume."""
+        """Return normalized OHLCV data with date, ticker, OHLCV, and standard timestamp columns."""
 
 
 @dataclass
@@ -63,7 +65,8 @@ class SyntheticMarketDataProvider:
                 )
             )
 
-        return pd.concat(frames, ignore_index=True).sort_values(["date", "ticker"]).reset_index(drop=True)
+        frame = pd.concat(frames, ignore_index=True).sort_values(["date", "ticker"]).reset_index(drop=True)
+        return add_price_timestamps(frame)
 
 
 @dataclass
@@ -96,7 +99,22 @@ class YFinanceMarketDataProvider:
             threads=True,
         )
         if raw.empty:
-            return pd.DataFrame(columns=["date", "ticker", "open", "high", "low", "close", "adj_close", "volume"])
+            return pd.DataFrame(
+                columns=[
+                    "date",
+                    "ticker",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "adj_close",
+                    "volume",
+                    "event_timestamp",
+                    "availability_timestamp",
+                    "source_timestamp",
+                    "timezone",
+                ]
+            )
 
         frames: list[pd.DataFrame] = []
         if isinstance(raw.columns, pd.MultiIndex):
@@ -140,6 +158,10 @@ class LocalMarketDataProvider:
             frame = frame[frame["date"] >= pd.Timestamp(start).normalize()]
         if end:
             frame = frame[frame["date"] <= pd.Timestamp(end).normalize()]
+        if "event_timestamp" not in frame or "availability_timestamp" not in frame or "timezone" not in frame:
+            frame = add_price_timestamps(frame)
+        if "source_timestamp" not in frame:
+            frame["source_timestamp"] = pd.NaT
         return frame.sort_values(["date", "ticker"]).reset_index(drop=True)
 
 
@@ -156,4 +178,5 @@ def _normalize_yfinance_frame(frame: pd.DataFrame, ticker: str) -> pd.DataFrame:
         if column not in normalized.columns:
             normalized[column] = np.nan
     normalized["date"] = pd.to_datetime(normalized["date"]).dt.tz_localize(None).dt.normalize()
-    return normalized[columns].dropna(subset=["close"])
+    normalized = normalized[columns].dropna(subset=["close"])
+    return add_price_timestamps(normalized)
