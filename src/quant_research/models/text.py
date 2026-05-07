@@ -26,13 +26,17 @@ except Exception:  # pragma: no cover - platform-specific
 
 _LOCK_CATALOG: dict[str, threading.Lock] = {}
 _LOCK_CATALOG_GUARD = threading.Lock()
+SENTIMENT_LABELS = {"positive", "neutral", "negative"}
 
 
 def _canonical_sentiment_payload(payload: dict[str, float | str | bool]) -> dict[str, float | str | bool]:
+    label = str(payload.get("label", "neutral")).lower()
+    if label not in SENTIMENT_LABELS:
+        label = "neutral"
     return {
         "sentiment_score": float(payload.get("sentiment_score", 0.0)),
         "negative_flag": bool(payload.get("negative_flag", False)),
-        "label": str(payload.get("label", "neutral")),
+        "label": label,
         "confidence": float(payload.get("confidence", 0.0)),
         "event_tag": str(payload.get("event_tag", "")),
         "risk_flag": bool(payload.get("risk_flag", False)),
@@ -112,16 +116,17 @@ class FinBERTSentimentAnalyzer:
 
         result = self._pipeline(text[:3000], truncation=True, max_length=512)
         labels = {item["label"].lower(): float(item["score"]) for item in result[0]}
+        known_labels = {label: score for label, score in labels.items() if label in SENTIMENT_LABELS}
         positive = labels.get("positive", 0.0)
         negative = labels.get("negative", 0.0)
         neutral = labels.get("neutral", 0.0)
         sentiment = positive - negative
-        label = max(labels, key=labels.get) if labels else "neutral"
+        label = max(known_labels, key=known_labels.get) if known_labels else "neutral"
         return {
             "sentiment_score": sentiment,
             "negative_flag": negative > max(positive, neutral),
             "label": label,
-            "confidence": max(labels.values()) if labels else 0.0,
+            "confidence": max(known_labels.values()) if known_labels else 0.0,
             "event_tag": "",
             "risk_flag": negative > 0.5,
         }
@@ -273,8 +278,12 @@ class FilingEventExtractor:
             raise ValueError("confidence must be between 0 and 1")
         if not isinstance(payload["summary_ref"], str):
             raise ValueError("summary_ref must be a string")
-        payload["confidence"] = float(payload["confidence"])
-        return payload
+        return {
+            "event_tag": payload["event_tag"],
+            "risk_flag": payload["risk_flag"],
+            "confidence": float(payload["confidence"]),
+            "summary_ref": payload["summary_ref"],
+        }
 
     def _generate_with_local_model(self, text: str) -> str:
         tokenizer, model = self._load_local_model()

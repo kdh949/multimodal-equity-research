@@ -18,6 +18,7 @@ from quant_research.features.price import build_price_features
 from quant_research.features.sec import (
     _daily_filing_features,
     _extract_filing_sections,
+    _normalize_sec_feature_dtypes,
     build_sec_features,
 )
 
@@ -68,6 +69,49 @@ def test_sec_features_keep_unknown_cik_tickers_neutral() -> None:
     assert unknown["sec_risk_flag_20d"].eq(0).all()
     assert unknown["sec_event_tag"].eq("none").all()
     assert unknown["revenue_growth"].eq(0).all()
+
+
+def test_sec_compatibility_dtype_normalization_preserves_feature_values() -> None:
+    timestamp = pd.Timestamp("2026-01-06 14:30:00", tz="UTC")
+    canonical = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2026-01-06"]),
+            "ticker": ["AAPL"],
+            "sec_8k_count": [1.0],
+            "sec_10q_count": [0.0],
+            "sec_10k_count": [0.0],
+            "sec_form4_count": [0.0],
+            "sec_risk_flag": [1.0],
+            "sec_filing_section_count": [2.0],
+            "sec_filing_risk_section_count": [1.0],
+            "sec_filing_text_available": [1.0],
+            "sec_filing_text_length": [128.0],
+            "sec_filing_risk_keyword_count": [3.0],
+            "sec_event_confidence": [0.89],
+            "sec_event_timestamp": [timestamp],
+            "sec_availability_timestamp": [timestamp],
+            "sec_source_timestamp": [timestamp],
+        }
+    )
+    object_typed = canonical.astype(
+        {
+            "sec_8k_count": "object",
+            "sec_10q_count": "object",
+            "sec_10k_count": "object",
+            "sec_form4_count": "object",
+            "sec_risk_flag": "object",
+            "sec_filing_section_count": "object",
+            "sec_filing_risk_section_count": "object",
+            "sec_filing_text_available": "object",
+            "sec_filing_text_length": "object",
+            "sec_filing_risk_keyword_count": "object",
+            "sec_event_confidence": "object",
+        }
+    )
+
+    normalized = _normalize_sec_feature_dtypes(object_typed)
+
+    pd.testing.assert_frame_equal(normalized, canonical)
 
 
 def test_sec_companyconcept_and_frame_extractors_normalize_payloads() -> None:

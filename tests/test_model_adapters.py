@@ -368,6 +368,31 @@ def test_tabular_model_returns_calibration_metadata_and_raw_predictions() -> Non
     assert float(model.training_metadata["winsorized_feature_count"]) >= 0
 
 
+def test_tabular_pipeline_fitted_marker_does_not_change_prediction_outputs() -> None:
+    train = pd.DataFrame(
+        {
+            "date": pd.date_range("2026-01-01", periods=80, freq="D"),
+            "ticker": ["AAPL"] * 40 + ["MSFT"] * 40,
+            "volatility_20": [0.01 + i * 0.0002 for i in range(80)],
+            "return_5": [0.001 * (i % 9 - 4) for i in range(80)],
+            "return_20": [0.002 * (i % 7 - 3) for i in range(80)],
+            "forward_return_1": [0.001 * (i % 5 - 2) for i in range(80)],
+        }
+    )
+    model = TabularReturnModel(model_name="hist_gradient", random_state=17).fit(train)
+    final_estimator = model.fitted_model.steps[-1][1]
+
+    with_marker = model.predict(train.tail(12))
+    assert getattr(final_estimator, "_quant_research_fitted_") is True
+
+    delattr(final_estimator, "_quant_research_fitted_")
+    without_marker = model.predict(train.tail(12))
+
+    pd.testing.assert_frame_equal(with_marker, without_marker)
+    assert model.training_metadata["actual_model_name"] == "HistGradientBoostingRegressor"
+    assert model.training_metadata["fit_reason"] == "model_fitted"
+
+
 def test_finbert_uses_no_network_fallback_contract(monkeypatch) -> None:
     fake_transformers = types.ModuleType("transformers")
 

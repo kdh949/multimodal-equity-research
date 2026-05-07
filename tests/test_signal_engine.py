@@ -455,6 +455,42 @@ def test_signal_engine_does_not_use_realized_return_columns_for_actions() -> Non
     assert base_signal["signal_score"].iloc[0] == changed_signal["signal_score"].iloc[0]
 
 
+def test_signal_engine_does_not_pass_through_model_or_llm_action_labels() -> None:
+    frame = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2026-01-01", "2026-01-01", "2026-01-01"]),
+            "ticker": ["MODEL_SAYS_BUY", "MODEL_SAYS_SELL", "MODEL_SAYS_HOLD"],
+            "expected_return": [0.05, 0.05, 0.0001],
+            "predicted_volatility": [0.01, 0.01, 0.01],
+            "downside_quantile": [-0.10, 0.0, 0.0],
+            "text_risk_score": [0.0, 0.0, 0.0],
+            "sec_risk_flag": [0.0, 0.0, 0.0],
+            "sec_risk_flag_20d": [0.0, 0.0, 0.0],
+            "news_negative_ratio": [0.0, 0.0, 0.0],
+            "liquidity_score": [20.0, 20.0, 20.0],
+            "model_confidence": [1.0, 1.0, 1.0],
+            "mock_model_action": ["BUY", "SELL", "HOLD"],
+            "mock_llm_trade_decision": ["BUY", "SELL", "HOLD"],
+            "model_prediction_text": [
+                "BUY because momentum is strong",
+                "SELL because valuation is high",
+                "HOLD pending earnings",
+            ],
+        }
+    )
+
+    signals = DeterministicSignalEngine(SignalEngineConfig()).generate(frame)
+    actions = dict(zip(signals["ticker"], signals["action"], strict=True))
+
+    assert actions == {
+        "MODEL_SAYS_BUY": "SELL",
+        "MODEL_SAYS_SELL": "BUY",
+        "MODEL_SAYS_HOLD": "HOLD",
+    }
+    assert signals["action"].tolist() != signals["mock_model_action"].tolist()
+    assert signals["action"].tolist() != signals["mock_llm_trade_decision"].tolist()
+
+
 def test_signal_engine_ignores_report_only_top_decile_metric_for_scores_and_actions() -> None:
     base = pd.DataFrame(
         {

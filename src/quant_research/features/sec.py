@@ -25,6 +25,25 @@ _FILING_SECTION_RE = re.compile(
 )
 _FILING_SECTION_RISK_HINTS = ("risk", "litigation", "investigation", "bankruptcy", "fraud")
 _US_MARKET_CLOSE_OFFSET = pd.Timedelta(hours=16)
+_FILING_COUNT_COLUMNS = [
+    "sec_8k_count",
+    "sec_10q_count",
+    "sec_10k_count",
+    "sec_form4_count",
+    "sec_risk_flag",
+    "sec_filing_section_count",
+    "sec_filing_risk_section_count",
+]
+_FILING_TEXT_NUMERIC_COLUMNS = [
+    "sec_filing_text_available",
+    "sec_filing_text_length",
+    "sec_filing_risk_keyword_count",
+]
+_FILING_TIMESTAMP_COLUMNS = [
+    "sec_event_timestamp",
+    "sec_availability_timestamp",
+    "sec_source_timestamp",
+]
 
 
 def build_sec_features(
@@ -48,37 +67,28 @@ def build_sec_features(
         )
         filing_daily = _align_filing_features_to_calendar(filing_daily, features["date"])
         features = features.merge(filing_daily, on=["date", "ticker"], how="left")
-        for column in [
-            "sec_8k_count",
-            "sec_10q_count",
-            "sec_10k_count",
-            "sec_form4_count",
-            "sec_risk_flag",
-            "sec_filing_section_count",
-            "sec_filing_risk_section_count",
-        ]:
-            features[column] = features[column].fillna(0.0)
+        for column in _FILING_COUNT_COLUMNS:
+            features[column] = pd.to_numeric(features[column], errors="coerce").fillna(0.0)
             features[f"{column}_20d"] = features[column].rolling(20, min_periods=1).sum()
-        for column in [
-            "sec_filing_text_available",
-            "sec_filing_text_length",
-            "sec_filing_risk_keyword_count",
-        ]:
-            features[column] = features[column].fillna(0.0)
+        for column in _FILING_TEXT_NUMERIC_COLUMNS:
+            features[column] = pd.to_numeric(features[column], errors="coerce").fillna(0.0)
             features[f"{column}_20d"] = features[column].rolling(20, min_periods=1).sum()
         features["sec_event_tag"] = features["sec_event_tag"].fillna("none")
-        features["sec_event_confidence"] = features["sec_event_confidence"].fillna(0.0)
+        features["sec_event_confidence"] = pd.to_numeric(
+            features["sec_event_confidence"],
+            errors="coerce",
+        ).fillna(0.0)
         features["sec_summary_ref"] = features["sec_summary_ref"].fillna("")
-        for column in ["sec_event_timestamp", "sec_availability_timestamp", "sec_source_timestamp"]:
+        for column in _FILING_TIMESTAMP_COLUMNS:
             if column in features:
-                features[column] = features[column].ffill()
+                features[column] = timestamp_utc(features[column], UTC_TIMEZONE).ffill()
         if "sec_timezone" in features:
             features["sec_timezone"] = features["sec_timezone"].fillna(UTC_TIMEZONE)
         features["sec_filing_sections"] = features["sec_filing_sections"].fillna("")
 
         facts = facts_by_ticker.get(ticker, pd.DataFrame())
         features = _merge_fact_features(features, facts)
-        rows.append(features)
+        rows.append(_normalize_sec_feature_dtypes(features))
     if not rows:
         return base
     return pd.concat(rows, ignore_index=True).sort_values(["date", "ticker"]).reset_index(drop=True)
@@ -218,18 +228,7 @@ def _daily_filing_features(
         _save_filing_extraction_cache(cache, cache_path)
 
     rows: list[dict[str, object]] = []
-    numeric_columns = [
-        "sec_8k_count",
-        "sec_10q_count",
-        "sec_10k_count",
-        "sec_form4_count",
-        "sec_risk_flag",
-        "sec_filing_text_available",
-        "sec_filing_text_length",
-        "sec_filing_risk_keyword_count",
-        "sec_filing_section_count",
-        "sec_filing_risk_section_count",
-    ]
+    numeric_columns = [*_FILING_COUNT_COLUMNS, *_FILING_TEXT_NUMERIC_COLUMNS]
     for (date, grouped_ticker), group in frame.groupby(["date", "ticker"]):
         event_counter = Counter(
             tag for tags in group["sec_event_tag"] for tag in str(tags).split(",") if tag and tag != "none"
@@ -271,18 +270,7 @@ def _align_filing_features_to_calendar(filing_daily: pd.DataFrame, calendar_date
 
     numeric_columns = [
         column
-        for column in [
-            "sec_8k_count",
-            "sec_10q_count",
-            "sec_10k_count",
-            "sec_form4_count",
-            "sec_risk_flag",
-            "sec_filing_text_available",
-            "sec_filing_text_length",
-            "sec_filing_risk_keyword_count",
-            "sec_filing_section_count",
-            "sec_filing_risk_section_count",
-        ]
+        for column in [*_FILING_COUNT_COLUMNS, *_FILING_TEXT_NUMERIC_COLUMNS]
         if column in aligned.columns
     ]
     rows: list[dict[str, object]] = []
@@ -370,6 +358,17 @@ def _merge_fact_features(features: pd.DataFrame, facts: pd.DataFrame) -> pd.Data
     if "sec_fact_timezone" in merged:
         merged["sec_fact_timezone"] = merged["sec_fact_timezone"].ffill().fillna(UTC_TIMEZONE)
     return merged
+
+
+def _normalize_sec_feature_dtypes(features: pd.DataFrame) -> pd.DataFrame:
+    normalized = features.copy()
+    for column in [*_FILING_COUNT_COLUMNS, *_FILING_TEXT_NUMERIC_COLUMNS, "sec_event_confidence"]:
+        if column in normalized:
+            normalized[column] = pd.to_numeric(normalized[column], errors="coerce").fillna(0.0)
+    for column in _FILING_TIMESTAMP_COLUMNS:
+        if column in normalized:
+            normalized[column] = timestamp_utc(normalized[column], UTC_TIMEZONE)
+    return normalized
 
 
 def _ensure_filing_timestamp_columns(frame: pd.DataFrame) -> pd.DataFrame:

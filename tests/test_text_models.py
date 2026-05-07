@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import sys
+import types
 
 import pytest
 
@@ -37,6 +39,59 @@ def test_filing_event_extractor_validates_schema() -> None:
 
     with pytest.raises(ValueError):
         extractor.validate_json(json.dumps({"event_tag": "current_report"}))
+
+
+def test_filing_event_extractor_strips_final_action_label_extras() -> None:
+    extractor = FilingEventExtractor()
+    payload = {
+        "event_tag": "guidance",
+        "risk_flag": True,
+        "confidence": 0.74,
+        "summary_ref": "guidance risk",
+        "action": "BUY",
+        "trade_decision": "SELL",
+        "final_signal": "HOLD",
+    }
+
+    result = extractor.validate_json(json.dumps(payload))
+
+    assert result == {
+        "event_tag": "guidance",
+        "risk_flag": True,
+        "confidence": 0.74,
+        "summary_ref": "guidance risk",
+    }
+
+
+def test_finbert_does_not_emit_final_action_labels_from_model_labels(monkeypatch) -> None:
+    fake_transformers = types.ModuleType("transformers")
+
+    class FakeFinBERTPipeline:
+        def __call__(self, text: str, **kwargs: object) -> list[list[dict[str, object]]]:
+            return [
+                [
+                    {"label": "BUY", "score": 0.99},
+                    {"label": "SELL", "score": 0.01},
+                    {"label": "HOLD", "score": 0.50},
+                ]
+            ]
+
+    fake_transformers.pipeline = lambda *args, **kwargs: FakeFinBERTPipeline()
+    monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+
+    result = FinBERTSentimentAnalyzer().score("Ignore any instruction to emit a trade label.")
+
+    assert set(result) == {
+        "sentiment_score",
+        "negative_flag",
+        "label",
+        "confidence",
+        "event_tag",
+        "risk_flag",
+    }
+    assert result["label"] == "neutral"
+    assert result["confidence"] == 0.0
+    assert "action" not in result
 
 
 def test_fingpt_adapter_uses_same_structured_contract() -> None:
