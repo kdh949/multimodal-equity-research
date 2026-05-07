@@ -74,12 +74,17 @@ FinGPT는 공식 repo의 base model + LoRA adapter 구조를 따른다. `mt-llam
 
 ## 기본 종목군
 
-`SPY, QQQ, AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA, JPM`
+기본 전략 후보는 대표적인 미국 대형 유동주 30개 종목이다.
+
+`AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA, JPM, V, MA, UNH, XOM, JNJ, PG, HD, COST, ABBV, BAC, KO, PEP, WMT, AVGO, LLY, MRK, CVX, CRM, AMD, NFLX, ORCL, ADBE`
+
+`SPY`는 기본 벤치마크 데이터로만 포함하며, `SPY`, `QQQ`, `DIA`, `IWM` 같은 benchmark ETF는 기본 전략 후보에서 제외한다.
 
 ## 문서
 
 - [Architecture](docs/architecture.md)
 - [Data Sources](docs/data-sources.md)
+- [Data Timestamp Schema](docs/data-timestamp-schema.md)
 - [Modeling](docs/modeling.md)
 - [Risk And Validation](docs/risk-validation.md)
 - [Git Workflow](docs/git-workflow.md)

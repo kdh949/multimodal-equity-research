@@ -247,6 +247,8 @@ def _result(
     frame = predictions.copy()
     if not frame.empty and "forward_return_1" not in frame:
         frame["forward_return_1"] = 0.005
+    if not frame.empty and "forward_return_20" not in frame:
+        frame["forward_return_20"] = 0.05
     backtest = run_long_only_backtest(frame, BacktestConfig(top_n=1)) if not frame.empty else run_long_only_backtest(
         pd.DataFrame(
             columns=[
@@ -298,6 +300,7 @@ def _prediction_frame(
             "news_negative_ratio": [0.0, 0.0],
             "liquidity_score": [20.0, 20.0],
             "forward_return_1": [0.004, 0.006],
+            "forward_return_20": [0.04, 0.06],
             "is_oos": [False, True],
         }
     )

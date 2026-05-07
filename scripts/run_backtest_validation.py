@@ -6,7 +6,7 @@ import argparse
 import dataclasses
 import json
 import sys
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,9 +19,20 @@ import pandas as pd
 
 from quant_research.config import DEFAULT_TICKERS  # noqa: E402
 from quant_research.pipeline import PipelineConfig, PipelineResult, run_research_pipeline  # noqa: E402
+from quant_research.validation import (  # noqa: E402
+    ReportDataSource,
+    UniverseSnapshot,
+    build_artifact_manifest_from_paths,
+    build_canonical_report_metadata,
+    build_completed_validation_backtest_report,
+    build_validity_gate_report,
+    write_artifact_manifest_json,
+    write_completed_validation_backtest_report_artifacts,
+    write_validity_gate_artifacts,
+)
 
 TICKERS = list(DEFAULT_TICKERS)
-DATE_RANGE_YEARS = 2
+DATE_RANGE_YEARS = 3
 REPORT_ROOT = ROOT / "reports"
 SEP_WIDE = "=" * 60
 SEP_THIN = "-" * 60
@@ -66,6 +77,11 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         metavar="TICKER",
         help="분석할 종목 코드 목록. 기본값: DEFAULT_TICKERS (10개)",
+    )
+    parser.add_argument(
+        "--skip-manifest-regeneration",
+        action="store_true",
+        help="리서치/백테스트 산출물 저장 후 artifact_manifest.json 재생성을 건너뜁니다.",
     )
     return parser.parse_args()
 
@@ -225,17 +241,36 @@ def print_portfolio_metrics(result: PipelineResult) -> None:
         return
 
     excess_sign = "+" if m.excess_return >= 0 else ""
-    print(f"  CAGR (연환산 수익률)       : {m.cagr:>+.2%}")
-    print(f"  벤치마크 CAGR (SPY)        : {m.benchmark_cagr:>+.2%}")
-    print(f"  초과 수익률                : {excess_sign}{m.excess_return:.2%}")
-    print(f"  연환산 변동성              : {m.annualized_volatility:.2%}")
-    print(f"  샤프 비율                  : {m.sharpe:.2f}")
-    print(f"  최대 낙폭 (Max Drawdown)   : {m.max_drawdown:.2%}")
+    print(f"  성과 산출 기준             : {m.return_basis} (거래비용/슬리피지 차감 후 순수익률)")
+    print(f"  순 CAGR (연환산 수익률)    : {m.net_cagr:>+.2%}")
+    print(f"  총 CAGR (비용 차감 전)     : {m.gross_cagr:>+.2%}")
+    print(f"  벤치마크 순 CAGR (SPY)     : {m.benchmark_cost_adjusted_cagr:>+.2%}")
+    print(f"  순 초과 수익률             : {excess_sign}{m.excess_return:.2%}")
+    print(f"  순 누적 수익률             : {m.net_cumulative_return:>+.2%}")
+    print(f"  총 누적 수익률             : {m.gross_cumulative_return:>+.2%}")
+    print(f"  누적 비용 차감             : {m.total_cost_return:.2%}")
+    print(f"  순 연환산 변동성           : {m.annualized_volatility:.2%}")
+    print(f"  순 샤프 비율               : {m.sharpe:.2f}")
+    print(f"  순 최대 낙폭 (Max DD)      : {m.max_drawdown:.2%}")
     print(f"  적중률 (Hit Rate)          : {m.hit_rate:.1%}")
     print(f"  평균 일간 회전율           : {m.turnover:.1%}")
     print(f"  평균 포트폴리오 노출도     : {m.exposure:.1%}")
+    print(f"  평균 covariance 변동성     : {m.average_portfolio_volatility_estimate:.2%}")
+    print(f"  최대 covariance 변동성     : {m.max_portfolio_volatility_estimate:.2%}")
+    print(f"  최대 종목 비중             : {m.max_position_weight:.1%}")
+    print(f"  최대 섹터 노출             : {m.max_sector_exposure:.1%}")
+    print(f"  최대 리스크 기여도         : {m.max_position_risk_contribution:.1%}")
+    print(
+        "  비용 조정 sizing 검증      : "
+        f"{m.position_sizing_validation_status.upper()} "
+        f"({m.position_sizing_validation_pass_rate:.1%}, {m.position_sizing_validation_rule})"
+    )
     print()
-    print(f"  거래 비용: {5:.0f}bps + {2:.0f}bps 슬리피지  |  최대 종목수: top-{3}  |  최대 종목 비중: 35%")
+    print(
+        f"  거래 비용: {m.transaction_cost_return:.2%} transaction + "
+        f"{m.slippage_cost_return:.2%} slippage  |  "
+        "포지션 sizing은 비용 차감 후 long-only/risk 제약으로 검증"
+    )
     print()
 
 
@@ -272,13 +307,337 @@ def print_sample_predictions(result: PipelineResult, n: int = 20) -> None:
     print()
 
 
-def save_outputs(result: PipelineResult, out_dir: Path) -> None:
+def save_outputs(
+    result: PipelineResult,
+    out_dir: Path,
+    config: PipelineConfig,
+    *,
+    regenerate_manifest: bool = True,
+) -> dict[str, str]:
+    metadata = _canonical_report_metadata(config)
+
+    result.market_data.to_csv(out_dir / "market_data.csv", index=False)
+    result.features.to_csv(out_dir / "features.csv", index=False)
     result.predictions.to_csv(out_dir / "predictions.csv", index=False)
+    result.backtest.signals.to_csv(out_dir / "signals.csv", index=False)
+    result.backtest.equity_curve.to_csv(out_dir / "equity_curve.csv", index=False)
     result.validation_summary.to_csv(out_dir / "validation_summary.csv", index=False)
 
+    _write_json_artifact(dataclasses.asdict(config), out_dir / "pipeline_config.json")
+    _write_json_artifact(metadata.to_dict(), out_dir / "canonical_metadata.json")
+    _write_json_artifact(
+        metadata.universe.universe_snapshot.to_dict(),
+        out_dir / "universe_snapshot.json",
+    )
+    _write_json_artifact(
+        dict(metadata.data_provenance.feature_availability_cutoff),
+        out_dir / "feature_availability_cutoff.json",
+    )
+
     metrics_dict = dataclasses.asdict(result.backtest.metrics)
-    with (out_dir / "metrics.json").open("w") as f:
-        json.dump(metrics_dict, f, indent=2, ensure_ascii=False)
+    _write_json_artifact(metrics_dict, out_dir / "metrics.json")
+
+    risk_sizing_validation = _risk_sizing_validation_summary(result, config)
+    _write_json_artifact(risk_sizing_validation, out_dir / "risk_sizing_validation.json")
+
+    validity_report = build_validity_gate_report(
+        result.predictions,
+        result.validation_summary,
+        result.backtest.equity_curve,
+        result.backtest.metrics,
+        ablation_summary=result.ablation_summary,
+        config=config,
+        benchmark_return_series=result.benchmark_return_series,
+        equal_weight_baseline_return_series=result.equal_weight_baseline_return_series,
+        baseline_comparison_inputs=result.baseline_comparison_inputs or None,
+    )
+    validity_gate_json_path, validity_gate_markdown_path = write_validity_gate_artifacts(
+        validity_report,
+        out_dir,
+    )
+    completed_report = build_completed_validation_backtest_report(
+        metadata=metadata,
+        deterministic_signal_outputs=result.backtest.signals,
+        backtest_results=result.backtest.equity_curve,
+        performance_metrics=result.backtest.metrics,
+        walk_forward_validation_metrics=result.validation_summary,
+        system_validity_gate=validity_report,
+        strategy_candidate_gate=validity_report,
+        artifact_manifest={
+            "artifacts": [
+                {"artifact_id": "predictions", "artifact_type": "csv", "path": "predictions.csv"},
+                {
+                    "artifact_id": "validation_summary",
+                    "artifact_type": "csv",
+                    "path": "validation_summary.csv",
+                },
+                {"artifact_id": "metrics", "artifact_type": "json", "path": "metrics.json"},
+                {
+                    "artifact_id": "validity_gate",
+                    "artifact_type": "json",
+                    "path": "validity_gate.json",
+                },
+            ]
+        },
+        report_path=str(out_dir / "canonical_run_report.md"),
+    )
+    report_artifacts = write_completed_validation_backtest_report_artifacts(
+        completed_report,
+        out_dir,
+    )
+    output_manifest = {
+        "market_data": str(out_dir / "market_data.csv"),
+        "features": str(out_dir / "features.csv"),
+        "predictions": str(out_dir / "predictions.csv"),
+        "signals": str(out_dir / "signals.csv"),
+        "equity_curve": str(out_dir / "equity_curve.csv"),
+        "validation_summary": str(out_dir / "validation_summary.csv"),
+        "pipeline_config": str(out_dir / "pipeline_config.json"),
+        "canonical_metadata": str(out_dir / "canonical_metadata.json"),
+        "universe_snapshot": str(out_dir / "universe_snapshot.json"),
+        "feature_availability_cutoff": str(out_dir / "feature_availability_cutoff.json"),
+        "metrics": str(out_dir / "metrics.json"),
+        "risk_sizing_validation": str(out_dir / "risk_sizing_validation.json"),
+        "validity_gate_json": str(validity_gate_json_path),
+        "validity_gate_markdown": str(validity_gate_markdown_path),
+        "canonical_report_json": report_artifacts["json"],
+        "canonical_report_markdown": report_artifacts["markdown"],
+        "canonical_report_html": report_artifacts["html"],
+        "canonical_report_json_sha256": report_artifacts["json_sha256"],
+        "canonical_report_markdown_sha256": report_artifacts["markdown_sha256"],
+        "canonical_report_html_sha256": report_artifacts["html_sha256"],
+    }
+    if regenerate_manifest:
+        manifest_path = regenerate_artifact_manifest(
+            out_dir=out_dir,
+            config=config,
+            metadata=metadata,
+            validity_report=validity_report,
+        )
+        output_manifest["artifact_manifest"] = str(manifest_path)
+    return output_manifest
+
+
+def regenerate_artifact_manifest(
+    *,
+    out_dir: Path,
+    config: PipelineConfig,
+    metadata: object,
+    validity_report: object,
+) -> Path:
+    """Regenerate the reproducibility manifest from completed run artifacts."""
+
+    gate_payload = validity_report.to_dict() if hasattr(validity_report, "to_dict") else {}
+    system_status = str(gate_payload.get("system_validity_status") or "not_evaluated")
+    strategy_status = str(gate_payload.get("strategy_candidate_status") or "not_evaluated")
+    metadata_payload = metadata.to_dict() if hasattr(metadata, "to_dict") else {}
+    identity = metadata_payload.get("identity", {})
+    experiment_id = str(identity.get("experiment_id") or "stage1_canonical_experiment")
+    run_id = str(identity.get("run_id") or out_dir.name)
+
+    manifest = build_artifact_manifest_from_paths(
+        experiment_id=experiment_id,
+        run_id=run_id,
+        dataset_paths=[
+            {
+                "path": out_dir / "market_data.csv",
+                "artifact_id": "market_data",
+                "schema_id": "market_data_ohlcv",
+                "description": "Research input market data snapshot used for feature generation.",
+            },
+            {
+                "path": out_dir / "features.csv",
+                "artifact_id": "model_feature_matrix",
+                "schema_id": "multimodal_feature_matrix",
+                "description": "Features available at t; used for research and validation only.",
+            },
+        ],
+        config_paths=[
+            {
+                "path": out_dir / "pipeline_config.json",
+                "artifact_id": "pipeline_config",
+                "schema_id": "pipeline_config",
+            },
+            {
+                "path": out_dir / "canonical_metadata.json",
+                "artifact_id": "canonical_metadata",
+                "schema_id": "canonical_report_metadata",
+            },
+            {
+                "path": out_dir / "risk_sizing_validation.json",
+                "artifact_id": "risk_sizing_validation",
+                "schema_id": "portfolio_risk_sizing_validation",
+            },
+        ],
+        model_output_paths=[
+            {
+                "path": out_dir / "predictions.csv",
+                "artifact_id": "model_predictions",
+                "description": "Model prediction features; not order signals.",
+            },
+        ],
+        backtest_output_paths=[
+            {"path": out_dir / "signals.csv", "artifact_id": "deterministic_signals"},
+            {"path": out_dir / "equity_curve.csv", "artifact_id": "equity_curve"},
+            {"path": out_dir / "validation_summary.csv", "artifact_id": "walk_forward_summary"},
+            {"path": out_dir / "metrics.json", "artifact_id": "performance_metrics"},
+            {"path": out_dir / "validity_gate.json", "artifact_id": "validity_gate"},
+        ],
+        universe_snapshot_path={
+            "path": out_dir / "universe_snapshot.json",
+            "artifact_id": "universe_snapshot",
+            "schema_id": "canonical_universe_snapshot",
+        },
+        feature_availability_cutoff_path={
+            "path": out_dir / "feature_availability_cutoff.json",
+            "artifact_id": "feature_availability_cutoff",
+            "schema_id": "feature_availability_cutoff",
+        },
+        report_path=out_dir / "canonical_run_report.md",
+        artifact_root=ROOT / "artifacts",
+        report_artifact_root=REPORT_ROOT,
+        metadata_schema_id=str(metadata_payload.get("schema_id") or "canonical_report_metadata"),
+        metadata_schema_version=str(
+            metadata_payload.get("schema_version") or "canonical_report_metadata.v1"
+        ),
+        system_validity_status=system_status,
+        strategy_candidate_status=strategy_status,
+        repo_path=ROOT,
+    )
+    return write_artifact_manifest_json(manifest, out_dir / "artifact_manifest.json")
+
+
+def _write_json_artifact(payload: object, path: Path) -> None:
+    path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False, default=str) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _canonical_report_metadata(config: PipelineConfig):
+    benchmark_ticker = str(config.benchmark_ticker).strip().upper()
+    universe_tickers = [
+        ticker
+        for ticker in config.tickers
+        if str(ticker).strip().upper() != benchmark_ticker
+    ]
+    return build_canonical_report_metadata(
+        experiment_id="stage1_canonical_experiment",
+        run_id=f"backtest_validation_{date.today().strftime('%Y%m%d')}",
+        universe_snapshot=UniverseSnapshot.from_tickers(
+            universe_tickers,
+            experiment_id="stage1_canonical_experiment",
+            snapshot_date=config.start,
+            benchmark_ticker=config.benchmark_ticker,
+        ),
+        start_date=config.start,
+        end_date=config.end,
+        data_sources=(
+            ReportDataSource(
+                source_id="market_data",
+                provider=config.data_mode,
+                dataset="ohlcv",
+                as_of_date=config.end,
+                available_at=datetime.now(UTC),
+            ),
+            ReportDataSource(
+                source_id="news_text",
+                provider=config.data_mode,
+                dataset="news_items",
+                as_of_date=config.end,
+                available_at=datetime.now(UTC),
+            ),
+            ReportDataSource(
+                source_id="sec_filings",
+                provider=config.data_mode,
+                dataset="edgar_filings_and_facts",
+                as_of_date=config.end,
+                available_at=datetime.now(UTC),
+            ),
+        ),
+        feature_availability_cutoff={
+            "price": "date <= t",
+            "news_text": "published_at <= t",
+            "sec_filing": "accepted_at <= t",
+            "model_adapter_outputs": "feature_available_at <= t",
+        },
+        created_at=datetime.now(UTC),
+    )
+
+
+def _risk_sizing_validation_summary(
+    result: PipelineResult,
+    config: PipelineConfig,
+) -> dict[str, object]:
+    metrics = dataclasses.asdict(result.backtest.metrics)
+    equity_curve = result.backtest.equity_curve
+    latest: dict[str, object] = {}
+    if not equity_curve.empty:
+        columns = [
+            "date",
+            "portfolio_volatility_estimate",
+            "position_sizing_validation_status",
+            "position_sizing_validation_rule",
+            "position_sizing_validation_reason",
+            "position_count",
+            "max_position_weight",
+            "max_sector_exposure",
+            "gross_exposure",
+            "net_exposure",
+            "max_position_risk_contribution",
+            "post_cost_validation_total_cost_return",
+        ]
+        latest = (
+            equity_curve[[column for column in columns if column in equity_curve.columns]]
+            .tail(1)
+            .to_dict("records")[0]
+        )
+    return {
+        "covariance_aware_risk": {
+            "applied": bool(
+                config.covariance_aware_risk_enabled
+                and not equity_curve.empty
+                and "portfolio_volatility_estimate" in equity_curve.columns
+                and equity_curve["portfolio_volatility_estimate"].notna().any()
+            ),
+            "configured_enabled": bool(config.covariance_aware_risk_enabled),
+            "parameters": {
+                "return_column": config.covariance_return_column,
+                "lookback_periods": int(config.portfolio_covariance_lookback),
+                "min_periods": int(config.covariance_min_periods),
+                "fallback": "diagonal_predicted_volatility",
+                "max_holdings": int(config.top_n),
+                "max_symbol_weight": float(config.max_symbol_weight),
+                "max_sector_weight": float(config.max_sector_weight),
+                "portfolio_volatility_limit": float(config.portfolio_volatility_limit),
+                "max_position_risk_contribution": float(
+                    config.max_position_risk_contribution
+                ),
+            },
+        },
+        "summary": {
+            "average_portfolio_volatility_estimate": metrics[
+                "average_portfolio_volatility_estimate"
+            ],
+            "max_portfolio_volatility_estimate": metrics[
+                "max_portfolio_volatility_estimate"
+            ],
+            "max_position_weight": metrics["max_position_weight"],
+            "max_sector_exposure": metrics["max_sector_exposure"],
+            "max_position_risk_contribution": metrics["max_position_risk_contribution"],
+            "position_sizing_validation_pass_rate": metrics[
+                "position_sizing_validation_pass_rate"
+            ],
+            "position_sizing_validation_status": metrics[
+                "position_sizing_validation_status"
+            ],
+            "position_sizing_validation_rule": metrics["position_sizing_validation_rule"],
+            "transaction_cost_return": metrics["transaction_cost_return"],
+            "slippage_cost_return": metrics["slippage_cost_return"],
+            "total_cost_return": metrics["total_cost_return"],
+        },
+        "latest_observation": latest,
+    }
 
 
 def print_file_summary(out_dir: Path) -> None:
@@ -313,8 +672,17 @@ def main() -> int:
     print_per_ticker_accuracy(result)
     print_portfolio_metrics(result)
     print_sample_predictions(result, n=20)
-    save_outputs(result, out_dir)
+    output_manifest = save_outputs(
+        result,
+        out_dir,
+        config,
+        regenerate_manifest=not args.skip_manifest_regeneration,
+    )
     print_file_summary(out_dir)
+    print(f"  Canonical report: {output_manifest['canonical_report_markdown']}")
+    if "artifact_manifest" in output_manifest:
+        print(f"  Artifact manifest: {output_manifest['artifact_manifest']}")
+    print()
 
     print(SEP_WIDE)
     print("  검증 완료.")
