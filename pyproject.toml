@@ -69,6 +69,16 @@ packages = ["src/quant_research"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+  "unit: fast deterministic unit tests",
+  "integration: local fixture integration tests",
+  "regression: golden fixture regression tests",
+  "smoke: quick sanity tests for core paths",
+  "slow: slow tests excluded from default CI",
+  "network: tests requiring internet access",
+  "llm: local heavy model tests",
+  "manual: manually triggered tests excluded from default CI",
+]
 
 [tool.ruff]
 line-length = 100
