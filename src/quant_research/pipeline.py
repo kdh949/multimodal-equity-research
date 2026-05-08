@@ -6,6 +6,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from inspect import Parameter, signature
+from pathlib import Path
 
 from quant_research.runtime import configure_local_runtime_defaults
 
@@ -459,10 +460,8 @@ def _load_sec_data(
     config: PipelineConfig, tickers: list[str]
 ) -> tuple[dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
     if config.data_mode == "local":
-        import os
-
-        sec_cache_dir = os.path.join(config.local_data_dir, "sec")
-        client = SecEdgarClient(cache_dir=sec_cache_dir)  # type: ignore[arg-type]
+        sec_cache_dir = Path(config.local_data_dir) / "sec"
+        client = SecEdgarClient(cache_dir=sec_cache_dir)
         filings_by_ticker: dict[str, pd.DataFrame] = {}
         facts_by_ticker: dict[str, pd.DataFrame] = {}
         frame_assets = _load_sec_frame_assets(client, config)

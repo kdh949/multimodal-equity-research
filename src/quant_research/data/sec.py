@@ -31,6 +31,7 @@ class SecEdgarClient:
     _last_request_at: float = field(default=0.0, init=False)
 
     def __post_init__(self) -> None:
+        self.cache_dir = Path(self.cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.session = requests.Session()
         self.session.headers.update(
