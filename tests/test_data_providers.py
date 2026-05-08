@@ -426,6 +426,15 @@ def test_sec_edgar_client_sets_user_agent_and_request_headers(tmp_path) -> None:
     assert "Host" not in client.session.headers
 
 
+def test_sec_edgar_client_accepts_string_cache_dir(tmp_path) -> None:
+    cache_dir = tmp_path / "sec"
+
+    client = sec_module.SecEdgarClient(cache_dir=str(cache_dir))  # type: ignore[arg-type]
+
+    assert client.cache_dir == cache_dir
+    assert cache_dir.exists()
+
+
 def test_sec_default_rate_limit_stays_within_fair_access_limit() -> None:
     assert SecSettings().max_requests_per_second <= 10.0
 

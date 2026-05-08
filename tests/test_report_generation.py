@@ -669,8 +669,9 @@ def test_successful_backtest_validation_save_outputs_writes_canonical_report_art
         native_tabular_isolation=False,
     )
     result = run_research_pipeline(config)
+    out_dir = tmp_path / "nested" / "validation_run"
 
-    manifest = _load_backtest_validation_script().save_outputs(result, tmp_path, config)
+    manifest = _load_backtest_validation_script().save_outputs(result, out_dir, config)
 
     assert set(manifest) >= {
         "validity_gate_json",
@@ -683,25 +684,25 @@ def test_successful_backtest_validation_save_outputs_writes_canonical_report_art
         "canonical_report_html_sha256",
         "artifact_manifest",
     }
-    assert (tmp_path / "market_data.csv").exists()
-    assert (tmp_path / "features.csv").exists()
-    assert (tmp_path / "signals.csv").exists()
-    assert (tmp_path / "equity_curve.csv").exists()
-    assert (tmp_path / "pipeline_config.json").exists()
-    assert (tmp_path / "canonical_metadata.json").exists()
-    assert (tmp_path / "universe_snapshot.json").exists()
-    assert (tmp_path / "feature_availability_cutoff.json").exists()
-    assert (tmp_path / "validity_gate.json").exists()
-    assert (tmp_path / "validity_report.md").exists()
-    assert (tmp_path / "canonical_run_report.json").exists()
-    assert (tmp_path / "canonical_run_report.md").exists()
-    assert (tmp_path / "canonical_run_report.html").exists()
-    assert (tmp_path / "artifact_manifest.json").exists()
+    assert (out_dir / "market_data.csv").exists()
+    assert (out_dir / "features.csv").exists()
+    assert (out_dir / "signals.csv").exists()
+    assert (out_dir / "equity_curve.csv").exists()
+    assert (out_dir / "pipeline_config.json").exists()
+    assert (out_dir / "canonical_metadata.json").exists()
+    assert (out_dir / "universe_snapshot.json").exists()
+    assert (out_dir / "feature_availability_cutoff.json").exists()
+    assert (out_dir / "validity_gate.json").exists()
+    assert (out_dir / "validity_report.md").exists()
+    assert (out_dir / "canonical_run_report.json").exists()
+    assert (out_dir / "canonical_run_report.md").exists()
+    assert (out_dir / "canonical_run_report.html").exists()
+    assert (out_dir / "artifact_manifest.json").exists()
 
     artifact_manifest = load_artifact_manifest_json(manifest["artifact_manifest"])
     validate_artifact_manifest_schema(artifact_manifest)
     assert artifact_manifest["experiment_id"] == "stage1_canonical_experiment"
-    assert artifact_manifest["report_path"] == str(tmp_path / "canonical_run_report.md")
+    assert artifact_manifest["report_path"] == str(out_dir / "canonical_run_report.md")
     assert artifact_manifest["system_validity_status"] != "not_evaluated"
     assert artifact_manifest["strategy_candidate_status"] != "not_evaluated"
     artifact_ids = {
@@ -725,7 +726,7 @@ def test_successful_backtest_validation_save_outputs_writes_canonical_report_art
 
     report = pd.read_json(manifest["canonical_report_json"], typ="series").to_dict()
     assert report["schema_id"] == COMPLETED_RUN_REPORT_SCHEMA_ID
-    assert report["report_path"] == str(tmp_path / "canonical_run_report.md")
+    assert report["report_path"] == str(out_dir / "canonical_run_report.md")
     assert report["system_validity_gate"]
     assert report["strategy_candidate_gate"]
     assert report["deterministic_signal_summary"]["llm_makes_trading_decisions"] is False

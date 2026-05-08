@@ -314,6 +314,7 @@ def save_outputs(
     *,
     regenerate_manifest: bool = True,
 ) -> dict[str, str]:
+    out_dir.mkdir(parents=True, exist_ok=True)
     metadata = _canonical_report_metadata(config)
 
     result.market_data.to_csv(out_dir / "market_data.csv", index=False)
